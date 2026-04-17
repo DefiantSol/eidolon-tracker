@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Eidolon Wish Tracker</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-title">
+        <label class="profile-picker">
+          <span>Profile</span>
+          <select id="profileSelect"></select>
+        </label>
+        <div class="profile-actions">
+          <button class="mini-action" id="profileNew" type="button">New</button>
+          <button class="mini-action" id="profileRename" type="button">Rename</button>
+        </div>
+        <p class="eyebrow">Aura Kingdom</p>
+        <h1>Eidolon Wish Tracker</h1>
+      </div>
+      <div class="topbar-side">
+        <button class="theme-toggle" id="themeToggle" type="button">Dark Mode</button>
+        <div class="stats" id="stats"></div>
+      </div>
+    </header>
+
+    <main>
+      <section class="toolbar">
+        <div class="tabs" role="tablist" aria-label="Tracker views">
+          <button class="tab active" data-view="shopping">Wishes</button>
+          <button class="tab" data-view="items">Items</button>
+          <button class="tab" data-view="eidolons">Eidolons</button>
+        </div>
+        <div class="toolbar-tools">
+          <label class="progress-filter">
+            <span>Status</span>
+            <select id="progressFilter">
+              <option value="incomplete" selected>Show Incomplete</option>
+              <option value="complete">Show Complete</option>
+              <option value="all">Show All</option>
+            </select>
+          </label>
+          <label class="search">
+            <span>Search</span>
+            <input id="search" type="search" placeholder="Eidolon, item, or source">
+          </label>
+          <button class="settings-toggle" id="settingsToggle" type="button" aria-label="Open settings" title="Settings">
+            <span aria-hidden="true">&#9881;</span>
+            <span>Settings</span>
+          </button>
+        </div>
+      </section>
+
+      <section id="content" class="content" aria-live="polite"></section>
+    </main>
+
+    <dialog class="settings-dialog" id="settingsDialog">
+      <form method="dialog" class="settings-panel">
+        <div class="settings-head">
+          <div>
+            <p class="eyebrow">Setup</p>
+            <h2>Settings</h2>
+          </div>
+          <button class="icon-action" value="close" aria-label="Close settings">&#215;</button>
+        </div>
+
+        <section class="setting-row">
+          <div>
+            <h3>Eidolons</h3>
+            <p>Choose whether setup starts from the starter six or every Eidolon owned.</p>
+          </div>
+          <div class="segmented" role="group" aria-label="Eidolon setup">
+            <button type="button" data-setting-action="starter_only">Starter Only</button>
+            <button type="button" data-setting-action="own_all">Own All</button>
+          </div>
+        </section>
+
+        <section class="setting-row">
+          <div>
+            <h3>Wishes</h3>
+            <p>Choose whether all wish checks are clear or everything is already complete.</p>
+          </div>
+          <div class="segmented" role="group" aria-label="Wish setup">
+            <button type="button" data-setting-action="clear_wishes">None</button>
+            <button type="button" data-setting-action="complete_all">All Complete</button>
+          </div>
+        </section>
+
+        <section class="setting-row">
+          <div>
+            <h3>Quick Setup</h3>
+            <p>Set owned Eidolons and current wish tiers from one condensed list.</p>
+          </div>
+          <button class="action primary" id="quickSetupOpen" type="button">Open Quick Setup</button>
+        </section>
+
+        <section class="setting-row">
+          <div>
+            <h3>Data Backup</h3>
+            <p>Download or restore the tracker database that contains every profile and progress check.</p>
+          </div>
+          <div class="backup-actions">
+            <button class="action" id="backupDownload" type="button">Download Backup</button>
+            <button class="action danger" id="backupRestore" type="button">Restore Backup</button>
+            <input id="backupRestoreInput" type="file" accept=".db,application/octet-stream" hidden>
+          </div>
+        </section>
+
+        <section class="setting-row">
+          <div>
+            <h3>Application</h3>
+            <p>Stop the local tracker server and close this app session cleanly.</p>
+          </div>
+          <button class="action danger" id="appShutdown" type="button">Shut Down App</button>
+        </section>
+      </form>
+    </dialog>
+
+    <dialog class="quick-setup-dialog" id="quickSetupDialog">
+      <form method="dialog" class="quick-setup-panel">
+        <div class="settings-head">
+          <div>
+            <p class="eyebrow">Setup</p>
+            <h2>Quick Setup</h2>
+          </div>
+          <button class="icon-action" value="close" aria-label="Close quick setup">&#215;</button>
+        </div>
+
+        <div class="quick-setup-intro">
+          <label class="quick-setup-search">
+            <span>Eidolon</span>
+            <input id="quickSetupSearch" type="search" placeholder="Search Eidolon name">
+          </label>
+          <span>Current Wish Tier</span>
+        </div>
+        <div class="quick-setup-list" id="quickSetupList"></div>
+
+        <div class="quick-setup-actions">
+          <button class="action" value="cancel">Cancel</button>
+          <button class="action primary" id="quickSetupApply" type="button">Apply Quick Setup</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="confirm-dialog" id="confirmDialog">
+      <form method="dialog" class="confirm-panel">
+        <h2 id="confirmTitle">Confirm change</h2>
+        <p id="confirmMessage"></p>
+        <div class="confirm-actions">
+          <button class="action" value="cancel">Cancel</button>
+          <button class="action primary" value="confirm">Apply</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

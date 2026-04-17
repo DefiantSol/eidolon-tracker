@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+tracker.db
+tracker.backup.*.db
+*.log
+.venv/
+.vscode/
+__pycache__/
+build/
+dist/
+*.spec
+.private/

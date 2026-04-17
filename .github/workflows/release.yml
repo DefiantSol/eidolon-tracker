@@ -1,0 +1,135 @@
+name: Build Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Release tag to build/upload, for example v1.0.0"
+        required: true
+        default: "v1.0.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Prepare release variables
+        id: vars
+        shell: pwsh
+        run: |
+          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            $tag = "${{ inputs.release_tag }}"
+          } else {
+            $tag = "${{ github.ref_name }}"
+          }
+          $zip = Join-Path "dist" "EidolonTracker-$tag-windows.zip"
+          "RELEASE_TAG=$tag" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "ZIP_PATH=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "release_tag=$tag" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "zip_path=$zip" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.vars.outputs.release_tag }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: python -m pip install pyinstaller
+
+      - name: Build executable
+        shell: pwsh
+        run: .\build.ps1
+
+      - name: Remove local save data if present
+        shell: pwsh
+        run: |
+          $db = "dist\EidolonTracker\tracker.db"
+          if (Test-Path -LiteralPath $db) {
+            Remove-Item -LiteralPath $db -Force
+          }
+
+      - name: Create release zip
+        shell: pwsh
+        run: |
+          $releaseTag = if ([string]::IsNullOrWhiteSpace($env:RELEASE_TAG)) { "${{ steps.vars.outputs.release_tag }}" } else { $env:RELEASE_TAG }
+          $zip = if ([string]::IsNullOrWhiteSpace($env:ZIP_PATH)) {
+            Join-Path "dist" "EidolonTracker-$releaseTag-windows.zip"
+          } else {
+            $env:ZIP_PATH
+          }
+          if ([string]::IsNullOrWhiteSpace($zip)) {
+            throw "Release zip destination path is empty."
+          }
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $zip) | Out-Null
+          Compress-Archive -LiteralPath "dist\EidolonTracker" -DestinationPath $zip -Force
+          "ZIP_PATH=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Verify release zip
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath "dist\EidolonTracker\EidolonTracker.exe")) {
+            throw "Built executable is missing."
+          }
+          if (-not (Test-Path -LiteralPath "dist\EidolonTracker\_internal\data\seed.json")) {
+            throw "Bundled seed data is missing."
+          }
+          if (Test-Path -LiteralPath "dist\EidolonTracker\tracker.db") {
+            throw "Personal tracker.db must not be included in release builds."
+          }
+
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $releaseTag = if ([string]::IsNullOrWhiteSpace($env:RELEASE_TAG)) { "${{ steps.vars.outputs.release_tag }}" } else { $env:RELEASE_TAG }
+          $zip = if ([string]::IsNullOrWhiteSpace($env:ZIP_PATH)) {
+            Join-Path "dist" "EidolonTracker-$releaseTag-windows.zip"
+          } else {
+            $env:ZIP_PATH
+          }
+          if (-not (Test-Path -LiteralPath $zip)) {
+            throw "Release zip is missing: $zip"
+          }
+
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($zip)
+          try {
+            $entries = @($archive.Entries | ForEach-Object { $_.FullName -replace "\\", "/" })
+            if ($entries -notcontains "EidolonTracker/EidolonTracker.exe") {
+              throw "Release zip does not contain EidolonTracker.exe."
+            }
+            if ($entries -notcontains "EidolonTracker/_internal/data/seed.json") {
+              throw "Release zip does not contain bundled seed.json."
+            }
+            if ($entries -contains "EidolonTracker/tracker.db") {
+              throw "Release zip contains tracker.db."
+            }
+          } finally {
+            $archive.Dispose()
+          }
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EidolonTracker-${{ steps.vars.outputs.release_tag }}-windows
+          path: dist/EidolonTracker-${{ steps.vars.outputs.release_tag }}-windows.zip
+          if-no-files-found: error
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.release_tag }}
+          name: ${{ steps.vars.outputs.release_tag }}
+          files: dist/EidolonTracker-${{ steps.vars.outputs.release_tag }}-windows.zip
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
