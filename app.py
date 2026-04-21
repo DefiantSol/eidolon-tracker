@@ -6,6 +6,7 @@ import hashlib
 import html
 import json
 import mimetypes
+import os
 import re
 import shutil
 import sqlite3
@@ -31,9 +32,12 @@ STATIC = RESOURCE_DIR / "static"
 DATA_DIR = RESOURCE_DIR / "data"
 SEED_PATH = DATA_DIR / "seed.json"
 IMAGE_CACHE = STATIC / "img"
-DB_PATH = APP_DIR / "tracker.db"
+LOCAL_APPDATA = Path(os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA") or APP_DIR)
+USER_DATA_DIR = LOCAL_APPDATA / "EidolonTracker"
+DB_PATH = USER_DATA_DIR / "tracker.db"
+LOG_PATH = USER_DATA_DIR / "eidolon-tracker.log"
 SHEET_NAME = "Eidolon"
-SEED_DATA_VERSION = "client-wishes-quality-20260420b"
+SEED_DATA_VERSION = "collections-stars-20260420"
 AKDB_BASE = "https://www.aurakingdom-db.com"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) EidolonTracker/1.0"
 STARTER_EIDOLON_NAMES = ("Serif (Adam)", "Merrilee (Eve)", "Grimm (Zhulong)", "Alessa", "Ahri", "Sendama")
@@ -55,7 +59,8 @@ def safe_print(message: str = "") -> None:
 
 def safe_log(message: str) -> None:
     try:
-        with (APP_DIR / "eidolon-tracker.log").open("a", encoding="utf-8") as handle:
+        USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with LOG_PATH.open("a", encoding="utf-8") as handle:
             handle.write(message.rstrip() + "\n")
     except OSError:
         return
@@ -79,7 +84,35 @@ def is_address_in_use_error(exc: OSError) -> bool:
     return err_no in {48, 98, 10048} or "address already in use" in str(exc).lower()
 
 
+def legacy_db_candidates() -> list[Path]:
+    candidates = []
+    for candidate in [
+        APP_DIR / "tracker.db",
+        Path(__file__).resolve().parent / "tracker.db",
+    ]:
+        if candidate == DB_PATH:
+            continue
+        if candidate not in candidates:
+            candidates.append(candidate)
+    return candidates
+
+
+def prepare_runtime_storage() -> None:
+    USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if DB_PATH.exists():
+        return
+    for legacy_path in legacy_db_candidates():
+        if not legacy_path.exists():
+            continue
+        try:
+            shutil.copy2(legacy_path, DB_PATH)
+            return
+        except OSError:
+            continue
+
+
 def connect() -> sqlite3.Connection:
+    prepare_runtime_storage()
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
@@ -108,11 +141,14 @@ def init_db() -> None:
                 source_row INTEGER NOT NULL,
                 owned INTEGER NOT NULL DEFAULT 0,
                 completed INTEGER NOT NULL DEFAULT 0,
+                star_rating INTEGER NOT NULL DEFAULT 0,
                 sort_order INTEGER NOT NULL,
                 image_url TEXT NOT NULL DEFAULT '',
                 icon_url TEXT NOT NULL DEFAULT '',
                 detail_url TEXT NOT NULL DEFAULT '',
                 character_note TEXT NOT NULL DEFAULT '',
+                client_partner_id INTEGER NOT NULL DEFAULT 0,
+                client_name TEXT NOT NULL DEFAULT '',
                 UNIQUE(profile_id, name)
             );
 
@@ -143,6 +179,9 @@ def init_db() -> None:
         ensure_column(conn, "eidolons", "detail_url", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "eidolons", "character_note", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "eidolons", "profile_id", "INTEGER NOT NULL DEFAULT 1")
+        ensure_column(conn, "eidolons", "star_rating", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(conn, "eidolons", "client_partner_id", "INTEGER NOT NULL DEFAULT 0")
+        ensure_column(conn, "eidolons", "client_name", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "wish_items", "item_quality_code", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "wish_items", "image_url", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "wish_items", "detail_url", "TEXT NOT NULL DEFAULT ''")
@@ -181,22 +220,25 @@ def rebuild_eidolons_for_profiles(conn: sqlite3.Connection) -> None:
             source_row INTEGER NOT NULL,
             owned INTEGER NOT NULL DEFAULT 0,
             completed INTEGER NOT NULL DEFAULT 0,
+            star_rating INTEGER NOT NULL DEFAULT 0,
             sort_order INTEGER NOT NULL,
             image_url TEXT NOT NULL DEFAULT '',
             icon_url TEXT NOT NULL DEFAULT '',
             detail_url TEXT NOT NULL DEFAULT '',
             character_note TEXT NOT NULL DEFAULT '',
+            client_partner_id INTEGER NOT NULL DEFAULT 0,
+            client_name TEXT NOT NULL DEFAULT '',
             UNIQUE(profile_id, name)
         );
 
         INSERT INTO eidolons_new (
-            id, profile_id, name, source_row, owned, completed, sort_order,
-            image_url, icon_url, detail_url, character_note
+            id, profile_id, name, source_row, owned, completed, star_rating, sort_order,
+            image_url, icon_url, detail_url, character_note, client_partner_id, client_name
         )
         SELECT
-            id, COALESCE(profile_id, 1), name, source_row, owned, completed, sort_order,
+            id, COALESCE(profile_id, 1), name, source_row, owned, completed, COALESCE(star_rating, 0), sort_order,
             COALESCE(image_url, ''), COALESCE(icon_url, ''), COALESCE(detail_url, ''),
-            COALESCE(character_note, '')
+            COALESCE(character_note, ''), COALESCE(client_partner_id, 0), COALESCE(client_name, '')
         FROM eidolons;
 
         DROP TABLE eidolons;
@@ -286,10 +328,10 @@ def insert_seed_data(conn: sqlite3.Connection, seed: dict, profile_id: int) -> N
         cursor = conn.execute(
             """
             INSERT INTO eidolons (
-                profile_id, name, source_row, owned, completed, sort_order,
-                image_url, icon_url, detail_url, character_note
+                profile_id, name, source_row, owned, completed, star_rating, sort_order,
+                image_url, icon_url, detail_url, character_note, client_partner_id, client_name
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 profile_id,
@@ -297,11 +339,14 @@ def insert_seed_data(conn: sqlite3.Connection, seed: dict, profile_id: int) -> N
                 eidolon["source_row"],
                 eidolon.get("owned", 0),
                 eidolon.get("completed", 0),
+                eidolon.get("star_rating", 0),
                 eidolon["sort_order"],
                 eidolon.get("image_url", ""),
                 eidolon.get("icon_url", ""),
                 eidolon.get("detail_url", ""),
                 eidolon.get("character_note", ""),
+                eidolon.get("client_partner_id", 0),
+                eidolon.get("client_name", ""),
             ),
         )
         eidolon_id = cursor.lastrowid
@@ -482,8 +527,8 @@ def restore_tracker_database(body: bytes) -> dict:
     if len(body) > 100 * 1024 * 1024:
         raise ValueError("Backup file is too large.")
 
-    APP_DIR.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(prefix="tracker.restore.", suffix=".db", dir=APP_DIR, delete=False) as temp_file:
+    USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(prefix="tracker.restore.", suffix=".db", dir=USER_DATA_DIR, delete=False) as temp_file:
         temp_path = Path(temp_file.name)
     try:
         temp_path.write_bytes(body)
@@ -491,7 +536,7 @@ def restore_tracker_database(body: bytes) -> dict:
 
         if DB_PATH.exists():
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-            shutil.copy2(DB_PATH, APP_DIR / f"tracker.backup.before-restore.{stamp}.db")
+            shutil.copy2(DB_PATH, USER_DATA_DIR / f"tracker.backup.before-restore.{stamp}.db")
 
         copy_sqlite_database(temp_path, DB_PATH)
         init_db()
@@ -1101,22 +1146,36 @@ def import_workbook(workbook_path: Path, force: bool = False) -> dict[str, int]:
         for eidolon_index, eidolon in enumerate(eidolons):
             cursor = conn.execute(
                 """
-                INSERT INTO eidolons (profile_id, name, source_row, owned, sort_order)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO eidolons (
+                    profile_id, name, source_row, owned, completed, star_rating, sort_order,
+                    client_partner_id, client_name
+                )
+                VALUES (?, ?, ?, ?, 0, ?, ?, ?, ?)
                 ON CONFLICT(profile_id, name) DO UPDATE SET
                     source_row = excluded.source_row,
                     owned = CASE
                         WHEN eidolons.owned = 1 OR excluded.owned = 1 THEN 1
                         ELSE 0
                     END,
-                    sort_order = excluded.sort_order
+                    sort_order = excluded.sort_order,
+                    client_partner_id = CASE
+                        WHEN excluded.client_partner_id != 0 THEN excluded.client_partner_id
+                        ELSE eidolons.client_partner_id
+                    END,
+                    client_name = CASE
+                        WHEN excluded.client_name != '' THEN excluded.client_name
+                        ELSE eidolons.client_name
+                    END
                 """,
                 (
                     profile_id,
                     eidolon["name"],
                     eidolon["source_row"],
                     1 if eidolon["name"] in STARTER_EIDOLONS else 0,
+                    eidolon.get("star_rating", 0),
                     eidolon_index,
+                    eidolon.get("client_partner_id", 0),
+                    eidolon.get("client_name", ""),
                 ),
             )
             eidolon_id = cursor.lastrowid or conn.execute(
@@ -1180,10 +1239,13 @@ def progress_snapshot(conn: sqlite3.Connection, profile_id: int | None = None) -
             row["name"]: {
                 "owned": row["owned"],
                 "completed": row["completed"],
+                "star_rating": row["star_rating"],
                 "image_url": row["image_url"],
                 "icon_url": row["icon_url"],
                 "detail_url": row["detail_url"],
                 "character_note": row["character_note"],
+                "client_partner_id": row["client_partner_id"],
+                "client_name": row["client_name"],
             }
             for row in eidolons
         },
@@ -1235,10 +1297,10 @@ def refresh_seed_data(force: bool = False) -> dict[str, int]:
                 cursor = conn.execute(
                     """
                     INSERT INTO eidolons (
-                        profile_id, name, source_row, owned, completed, sort_order,
-                        image_url, icon_url, detail_url, character_note
+                        profile_id, name, source_row, owned, completed, star_rating, sort_order,
+                        image_url, icon_url, detail_url, character_note, client_partner_id, client_name
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         profile_id,
@@ -1246,11 +1308,14 @@ def refresh_seed_data(force: bool = False) -> dict[str, int]:
                         eidolon["source_row"],
                         1 if eidolon["name"] in STARTER_EIDOLONS else saved_eidolon.get("owned", eidolon.get("owned", 0)),
                         saved_eidolon.get("completed", eidolon.get("completed", 0)),
+                        saved_eidolon.get("star_rating", eidolon.get("star_rating", 0)),
                         eidolon["sort_order"],
                         saved_eidolon.get("image_url") or eidolon.get("image_url", ""),
                         saved_eidolon.get("icon_url") or eidolon.get("icon_url", ""),
                         saved_eidolon.get("detail_url") or eidolon.get("detail_url", ""),
                         saved_eidolon.get("character_note") or eidolon.get("character_note", ""),
+                        saved_eidolon.get("client_partner_id") or eidolon.get("client_partner_id", 0),
+                        saved_eidolon.get("client_name") or eidolon.get("client_name", ""),
                     ),
                 )
                 eidolon_id = cursor.lastrowid
@@ -1321,10 +1386,10 @@ def rebuild_from_reference(reference_path: Path, live_path: Path) -> dict[str, i
             cursor = conn.execute(
                 """
                 INSERT INTO eidolons (
-                    profile_id, name, source_row, owned, completed, sort_order,
-                    image_url, icon_url, detail_url, character_note
+                    profile_id, name, source_row, owned, completed, star_rating, sort_order,
+                    image_url, icon_url, detail_url, character_note, client_partner_id, client_name
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     profile_id,
@@ -1332,11 +1397,14 @@ def rebuild_from_reference(reference_path: Path, live_path: Path) -> dict[str, i
                     eidolon["source_row"],
                     1 if starter_owned else saved_eidolon.get("owned", 0),
                     0,
+                    saved_eidolon.get("star_rating", eidolon.get("star_rating", 0)),
                     eidolon_index,
                     saved_eidolon.get("image_url", ""),
                     saved_eidolon.get("icon_url", ""),
                     saved_eidolon.get("detail_url", ""),
                     saved_eidolon.get("character_note", ""),
+                    saved_eidolon.get("client_partner_id") or eidolon.get("client_partner_id", 0),
+                    saved_eidolon.get("client_name") or eidolon.get("client_name", ""),
                 ),
             )
             eidolon_id = cursor.lastrowid
@@ -1419,6 +1487,102 @@ def rebuild_from_reference(reference_path: Path, live_path: Path) -> dict[str, i
 
 def row_to_dict(row: sqlite3.Row) -> dict:
     return {key: row[key] for key in row.keys()}
+
+
+def seed_collections() -> list[dict]:
+    if not SEED_PATH.exists():
+        return []
+    try:
+        seed = json.loads(SEED_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError, json.JSONDecodeError):
+        return []
+    return seed.get("collections", [])
+
+
+def collection_matches_progress(collection: dict, progress_filter: str) -> bool:
+    max_star = collection.get("active_star_level", 0)
+    owned_count = collection.get("owned_count", 0)
+    member_count = collection.get("member_count", 0)
+    if progress_filter == "all":
+        return True
+    if progress_filter == "complete":
+        return max_star >= 4
+    if progress_filter == "active":
+        return owned_count > 0 and max_star < 4
+    return max_star < 4
+
+
+def build_collections(eidolons: list[dict]) -> list[dict]:
+    collection_aliases = {
+        normalize_name("Yamata no Orochi"): {normalize_name("Orochi")},
+        normalize_name("Shuten-Douji"): {normalize_name("Shuten-Doji")},
+        normalize_name("Summer Shuten-Douji"): {normalize_name("Summer Shuten-Doji")},
+    }
+
+    def collection_name_candidates(name: str) -> set[str]:
+        candidates = eidolon_name_candidates(name) | {
+            normalize_name(value) for value in eidolon_display_candidates(name)
+        }
+        for candidate in list(candidates):
+            candidates.update(collection_aliases.get(candidate, set()))
+        return {candidate for candidate in candidates if candidate}
+
+    partner_map = {
+        int(eidolon.get("client_partner_id", 0)): eidolon
+        for eidolon in eidolons
+        if int(eidolon.get("client_partner_id", 0) or 0) > 0
+    }
+    name_map: dict[str, dict] = {}
+    for eidolon in eidolons:
+        for candidate in collection_name_candidates(eidolon["name"]):
+            if candidate:
+                name_map[candidate] = eidolon
+    collections = []
+    for entry in seed_collections():
+        members = []
+        stars = []
+        owned_count = 0
+        source_names = entry.get("member_names") or entry.get("member_client_names") or []
+        for index, partner_id in enumerate(entry.get("member_partner_ids", [])):
+            eidolon = partner_map.get(int(partner_id))
+            if eidolon is None and index < len(source_names):
+                for candidate in collection_name_candidates(source_names[index]):
+                    eidolon = name_map.get(candidate)
+                    if eidolon is not None:
+                        break
+            member_name = source_names[index] if index < len(source_names) else str(partner_id)
+            member = {
+                "partner_id": partner_id,
+                "name": eidolon["name"] if eidolon else member_name,
+                "eidolon_id": eidolon["id"] if eidolon else 0,
+                "owned": int(eidolon["owned"]) if eidolon else 0,
+                "star_rating": int(eidolon.get("star_rating", 0) or 0) if eidolon else 0,
+                "detail_url": eidolon.get("detail_url", "") if eidolon else "",
+            }
+            if member["owned"]:
+                owned_count += 1
+            stars.append(member["star_rating"])
+            members.append(member)
+        active_star_level = 0
+        for tier in range(1, 5):
+            if members and all(star >= tier for star in stars):
+                active_star_level = tier
+            else:
+                break
+        collections.append(
+            {
+                **entry,
+                "members": members,
+                "member_count": len(members),
+                "owned_count": owned_count,
+                "active_star_level": active_star_level,
+                "one_star_active": 1 if active_star_level >= 1 else 0,
+                "two_star_active": 1 if active_star_level >= 2 else 0,
+                "three_star_active": 1 if active_star_level >= 3 else 0,
+                "four_star_active": 1 if active_star_level >= 4 else 0,
+            }
+        )
+    return collections
 
 
 def apply_wish_metrics(eidolons: list[dict], items: list[dict]) -> None:
@@ -1509,7 +1673,7 @@ def apply_wish_metrics(eidolons: list[dict], items: list[dict]) -> None:
             eidolon["current_wish_tier"] = 0
 
 
-def build_summary(eidolons: list[dict], items: list[dict]) -> dict:
+def build_summary(eidolons: list[dict], items: list[dict], collections: list[dict] | None = None) -> dict:
     wishes_total = sum(eidolon.get("wish_count", 0) for eidolon in eidolons)
     wishes_completed = sum(eidolon.get("completed_wish_count", 0) for eidolon in eidolons)
     wishes_active = sum(
@@ -1524,7 +1688,7 @@ def build_summary(eidolons: list[dict], items: list[dict]) -> dict:
         for item in items
         if item.get("eidolon_owned") and not item.get("eidolon_completed") and not item.get("completed")
     )
-    return {
+    summary = {
         "eidolons": len(eidolons),
         "owned": sum(1 for eidolon in eidolons if eidolon.get("owned")),
         "completed": sum(1 for eidolon in eidolons if eidolon.get("completed")),
@@ -1535,6 +1699,15 @@ def build_summary(eidolons: list[dict], items: list[dict]) -> dict:
         "items_active": item_active,
         "items_completed": item_completed,
     }
+    if collections is not None:
+        summary.update(
+            {
+                "collections_total": len(collections),
+                "collections_three_star": sum(1 for collection in collections if collection.get("three_star_active")),
+                "collections_four_star": sum(1 for collection in collections if collection.get("four_star_active")),
+            }
+        )
+    return summary
 
 
 def get_payload() -> dict:
@@ -1576,18 +1749,26 @@ def get_payload() -> dict:
             eidolon["is_starter"] = 1 if eidolon["name"] in STARTER_EIDOLONS else 0
         item_dicts = [row_to_dict(row) for row in items]
         apply_wish_metrics(eidolons, item_dicts)
+        collections = build_collections(eidolons)
         return {
             **profiles_payload(conn),
-            "summary": build_summary(eidolons, item_dicts),
+            "summary": build_summary(eidolons, item_dicts, collections),
             "eidolons": eidolons,
             "items": item_dicts,
+            "collections": collections,
         }
 
 
 def set_eidolon(eidolon_id: int, payload: dict) -> None:
     flags = {key: 1 if value else 0 for key, value in payload.items() if key in {"owned", "completed"}}
     note = str(payload.get("character_note", ""))[:500] if "character_note" in payload else None
-    if not flags and note is None:
+    star_rating = None
+    if "star_rating" in payload:
+        try:
+            star_rating = max(0, min(int(payload.get("star_rating", 0) or 0), 4))
+        except (TypeError, ValueError):
+            star_rating = 0
+    if not flags and note is None and star_rating is None:
         return
     with connect() as conn:
         profile_id = get_current_profile_id(conn)
@@ -1595,6 +1776,24 @@ def set_eidolon(eidolon_id: int, payload: dict) -> None:
             assignments = ", ".join(f"{key} = ?" for key in flags)
             values = list(flags.values()) + [eidolon_id, profile_id]
             conn.execute(f"UPDATE eidolons SET {assignments} WHERE id = ? AND profile_id = ?", values)
+        if star_rating is not None:
+            conn.execute(
+                "UPDATE eidolons SET star_rating = ?, owned = CASE WHEN ? > 0 THEN 1 ELSE owned END WHERE id = ? AND profile_id = ?",
+                (star_rating, star_rating, eidolon_id, profile_id),
+            )
+        if flags.get("owned") == 0:
+            conn.execute("UPDATE eidolons SET completed = 0, star_rating = 0 WHERE id = ? AND profile_id = ?", (eidolon_id, profile_id))
+            conn.execute(
+                """
+                DELETE FROM item_progress
+                WHERE item_id IN (
+                    SELECT id
+                    FROM wish_items
+                    WHERE eidolon_id = ?
+                )
+                """,
+                (eidolon_id,),
+            )
         if note is not None:
             conn.execute(
                 "UPDATE eidolons SET character_note = ? WHERE id = ? AND profile_id = ? AND name IN (%s)"
@@ -1670,8 +1869,16 @@ def apply_bulk_action(action: str) -> None:
             conn.execute("UPDATE eidolons SET owned = 1 WHERE profile_id = ?", (profile_id,))
             return
 
+        if action == "star_all_1":
+            conn.execute("UPDATE eidolons SET owned = 1, star_rating = 1 WHERE profile_id = ?", (profile_id,))
+            return
+
+        if action == "star_all_4":
+            conn.execute("UPDATE eidolons SET owned = 1, star_rating = 4 WHERE profile_id = ?", (profile_id,))
+            return
+
         if action == "complete_all":
-            conn.execute("UPDATE eidolons SET owned = 1, completed = 1 WHERE profile_id = ?", (profile_id,))
+            conn.execute("UPDATE eidolons SET owned = 1, completed = 1, star_rating = CASE WHEN star_rating = 0 THEN 4 ELSE star_rating END WHERE profile_id = ?", (profile_id,))
             conn.execute(
                 """
                 INSERT OR REPLACE INTO item_progress (item_id, completed)
@@ -1714,9 +1921,10 @@ def apply_bulk_action(action: str) -> None:
                 (profile_id,),
             )
             conn.execute(
-                "UPDATE eidolons SET owned = CASE WHEN name IN (%s) THEN 1 ELSE 0 END, completed = 0 WHERE profile_id = ?"
-                % ",".join("?" for _ in STARTER_EIDOLON_NAMES),
-                [*STARTER_EIDOLON_NAMES, profile_id],
+                "UPDATE eidolons SET owned = CASE WHEN name IN ({0}) THEN 1 ELSE 0 END, completed = 0, star_rating = CASE WHEN name IN ({0}) THEN star_rating ELSE 0 END WHERE profile_id = ?".format(
+                    ",".join("?" for _ in STARTER_EIDOLON_NAMES)
+                ),
+                [*STARTER_EIDOLON_NAMES, *STARTER_EIDOLON_NAMES, profile_id],
             )
             return
 
@@ -1771,9 +1979,13 @@ def apply_quick_setup(entries: list[dict]) -> None:
             owned = 1 if entry.get("owned") else 0
             wish_tier = max(0, min(int(entry.get("wish_tier", 0) or 0), 6))
             mark_completed = 1 if entry.get("completed") else 0
+            star_rating = max(0, min(int(entry.get("star_rating", 0) or 0), 4))
             if not owned:
                 wish_tier = 0
                 mark_completed = 0
+                star_rating = 0
+            elif star_rating > 0:
+                owned = 1
 
             item_tiers = item_tiers_for_eidolon(conn, eidolon_id)
             max_tier = max((tier for _, tier in item_tiers), default=0)
@@ -1782,10 +1994,10 @@ def apply_quick_setup(entries: list[dict]) -> None:
             conn.execute(
                 """
                 UPDATE eidolons
-                SET owned = ?, completed = ?
+                SET owned = ?, completed = ?, star_rating = ?
                 WHERE id = ? AND profile_id = ?
                 """,
-                (owned, completed, eidolon_id, profile_id),
+                (owned, completed, star_rating, eidolon_id, profile_id),
             )
             conn.execute(
                 """

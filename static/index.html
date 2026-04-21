@@ -32,6 +32,7 @@
           <button class="tab active" data-view="shopping">Wishes</button>
           <button class="tab" data-view="items">Items</button>
           <button class="tab" data-view="eidolons">Eidolons</button>
+          <button class="tab" data-view="collections">Collection</button>
         </div>
         <div class="toolbar-tools">
           <label class="progress-filter">
@@ -75,6 +76,8 @@
           <div class="segmented" role="group" aria-label="Eidolon setup">
             <button type="button" data-setting-action="starter_only">Starter Only</button>
             <button type="button" data-setting-action="own_all">Own All</button>
+            <button type="button" data-setting-action="star_all_1">1 Star All</button>
+            <button type="button" data-setting-action="star_all_4">4 Star All</button>
           </div>
         </section>
 
@@ -134,7 +137,8 @@
             <span>Eidolon</span>
             <input id="quickSetupSearch" type="search" placeholder="Search Eidolon name">
           </label>
-          <span>Current Wish Tier</span>
+          <span class="quick-setup-stars-head">Stars</span>
+          <span class="quick-setup-tiers-head">Current Wish Tier</span>
         </div>
         <div class="quick-setup-list" id="quickSetupList"></div>
 

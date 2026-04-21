@@ -59,6 +59,19 @@ class ClientPartner:
     name: str
 
 
+@dataclass
+class ClientCollection:
+    collection_id: int
+    member_partner_ids: list[int]
+    one_star_text: str
+    two_star_text: str
+    three_star_text: str
+    four_star_text: str
+    collection_points: int
+    effect_group_key: str
+    effect_group_label: str
+
+
 def split_row(line: str) -> list[str]:
     return [part.strip() for part in line.rstrip("\n").split("|")]
 
@@ -104,6 +117,57 @@ def load_partners(data_dir: Path) -> dict[int, ClientPartner]:
             name=clean_text(cols[2]),
         )
     return partners
+
+
+def normalize_collection_effect(text: str) -> tuple[str, str]:
+    cleaned = clean_text(text)
+    if not cleaned:
+        return "", ""
+    if ":" in cleaned:
+        cleaned = cleaned.split(":", 1)[1].strip()
+    cleaned = re.sub(r"\s*[+-]\s*\d+(?:\.\d+)?%?$", "", cleaned).strip(" :")
+    if not cleaned:
+        return "", ""
+    return app.normalize_name(cleaned), cleaned
+
+
+def load_collections(data_dir: Path) -> list[ClientCollection]:
+    text_rows: dict[int, list[str]] = {}
+    text_path = data_dir / "t_eudemoncollect.ini"
+    if text_path.exists():
+        for raw in text_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            cols = split_row(raw)
+            if len(cols) >= 5 and cols[0].isdigit():
+                text_rows[int(cols[0])] = cols
+    collections: list[ClientCollection] = []
+    for raw in (data_dir / "eudemoncollect.ini").read_text(encoding="utf-8", errors="ignore").splitlines():
+        cols = split_row(raw)
+        if len(cols) < 29 or not cols[0].isdigit():
+            continue
+        row_id = int(cols[0])
+        text_cols = text_rows.get(row_id, [])
+        one_star_text = clean_text(text_cols[1]) if len(text_cols) > 1 and text_cols[1] else clean_text(cols[8])
+        two_star_text = clean_text(text_cols[2]) if len(text_cols) > 2 and text_cols[2] else clean_text(cols[12])
+        three_star_text = clean_text(text_cols[3]) if len(text_cols) > 3 and text_cols[3] else clean_text(cols[19])
+        four_star_text = clean_text(text_cols[4]) if len(text_cols) > 4 and text_cols[4] else clean_text(cols[26])
+        member_ids = [int(value) for value in cols[1:4] if value.isdigit()]
+        if not member_ids:
+            continue
+        effect_key, effect_label = normalize_collection_effect(three_star_text or four_star_text)
+        collections.append(
+            ClientCollection(
+                collection_id=row_id,
+                member_partner_ids=member_ids,
+                one_star_text=one_star_text,
+                two_star_text=two_star_text,
+                three_star_text=three_star_text,
+                four_star_text=four_star_text,
+                collection_points=int(cols[28]) if cols[28].isdigit() else 0,
+                effect_group_key=effect_key,
+                effect_group_label=effect_label,
+            )
+        )
+    return collections
 
 
 def item_name_for_ids(item_ids: list[int], item_names: dict[int, str]) -> str:
@@ -396,6 +460,47 @@ def map_seed_entries(seed: dict, partners: dict[int, ClientPartner]) -> dict[int
                 matched[partner_id] = by_candidate[key]
                 break
     return matched
+
+
+def sync_seed_collections(
+    seed_path: Path,
+    partners: dict[int, ClientPartner],
+    collections: list[ClientCollection],
+) -> None:
+    seed = json.loads(seed_path.read_text(encoding="utf-8"))
+    matched = map_seed_entries(seed, partners)
+    collections_payload = []
+    skipped = 0
+    for collection in collections:
+        member_seed_names = []
+        member_client_names = []
+        for partner_id in collection.member_partner_ids:
+            partner = partners.get(partner_id)
+            member_client_names.append(partner.name if partner else str(partner_id))
+            seed_entry = matched.get(partner_id)
+            member_seed_names.append(seed_entry["name"] if seed_entry else (partner.name if partner else str(partner_id)))
+        if not member_seed_names:
+            skipped += 1
+            continue
+        collections_payload.append(
+            {
+                "collection_id": collection.collection_id,
+                "member_partner_ids": collection.member_partner_ids,
+                "member_names": member_seed_names,
+                "member_client_names": member_client_names,
+                "one_star_text": collection.one_star_text,
+                "two_star_text": collection.two_star_text,
+                "three_star_text": collection.three_star_text,
+                "four_star_text": collection.four_star_text,
+                "collection_points": collection.collection_points,
+                "effect_group_key": collection.effect_group_key,
+                "effect_group_label": collection.effect_group_label,
+            }
+        )
+    seed["collections"] = collections_payload
+    seed_path.write_text(json.dumps(seed, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    print(f"Updated seed collections: {len(collections_payload)}")
+    print(f"Skipped collections: {skipped}")
 
 
 def sync_seed_wishes(
@@ -791,6 +896,7 @@ def main() -> None:
     parser.add_argument("--sync-seed-wishes", action="store_true")
     parser.add_argument("--sync-seed-workbook", action="store_true")
     parser.add_argument("--sync-seed-google-sheet", action="store_true")
+    parser.add_argument("--sync-seed-collections", action="store_true")
     parser.add_argument("--seed-path", type=Path, default=ROOT / "data" / "seed.json")
     parser.add_argument("--workbook", type=Path, default=ROOT / "data" / "AKTO References (Compilation).xlsx")
     parser.add_argument("--google-sheet-url", default="")
@@ -803,6 +909,7 @@ def main() -> None:
     quality_by_id = load_item_quality_codes(args.data_dir)
     partners = load_partners(args.data_dir)
     wishes_by_partner = load_wishes(args.data_dir, item_names)
+    collections = load_collections(args.data_dir)
     report(partners, wishes_by_partner)
     if args.sync_db_assets:
         sync_db_assets(partners, wishes_by_partner)
@@ -810,6 +917,8 @@ def main() -> None:
         sync_seed_wishes(args.seed_path, partners, wishes_by_partner, quality_by_id)
     if args.sync_seed_workbook:
         sync_seed_workbook(args.seed_path, args.workbook, partners, wishes_by_partner, quality_by_id)
+    if args.sync_seed_collections:
+        sync_seed_collections(args.seed_path, partners, collections)
     if args.sync_seed_google_sheet:
         if not args.google_sheet_url:
             parser.error("--google-sheet-url is required with --sync-seed-google-sheet.")

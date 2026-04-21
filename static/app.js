@@ -27,6 +27,7 @@ const appShutdown = document.querySelector("#appShutdown");
 const confirmDialog = document.querySelector("#confirmDialog");
 const confirmMessage = document.querySelector("#confirmMessage");
 const wishTierLabels = ["I", "II", "III", "IV", "V", "VI", "Done"];
+const starLabels = ["1", "2", "3", "4"];
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
@@ -72,6 +73,52 @@ function matchesEidolon(eidolon, items) {
   return items.some(matchesItem);
 }
 
+function matchesCollection(collection) {
+  const needle = normalize(state.search);
+  if (!needle) return true;
+  return [
+    collection.effect_group_label,
+    collection.one_star_text,
+    collection.two_star_text,
+    collection.three_star_text,
+    collection.four_star_text,
+    ...(collection.members || []).map((member) => member.name),
+  ]
+    .map(normalize)
+    .some((value) => value.includes(needle));
+}
+
+function matchesCollectionProgress(collection) {
+  const maxStar = Number(collection.active_star_level || 0);
+  const ownedCount = Number(collection.owned_count || 0);
+  if (state.progressFilter === "all") return true;
+  if (state.progressFilter === "complete") return maxStar >= 4;
+  if (state.progressFilter === "active") return ownedCount > 0 && maxStar < 4;
+  return maxStar < 4;
+}
+
+function collectionFamilyLabel(text) {
+  const match = String(text || "").match(/^([^:]+):\s*(.+)$/);
+  if (!match) return "";
+  return match[1].replace(/\s+Lv\d+$/i, "").trim();
+}
+
+function collectionEffectStat(text) {
+  const match = String(text || "").match(/^([^:]+):\s*(.+)$/);
+  return match ? match[2].trim() : String(text || "").trim();
+}
+
+function collectionStatValue(text) {
+  const stat = collectionEffectStat(text);
+  const match = stat.match(/([+-]\s*\d+(?:\.\d+)?%?)\s*$/);
+  return match ? match[1].replace(/\s+/g, "") : stat || "-";
+}
+
+function collectionGroupTitle(group) {
+  const family = collectionFamilyLabel(group.rows[0]?.three_star_text || group.rows[0]?.four_star_text || "");
+  return family ? `${group.label} (${family})` : group.label;
+}
+
 function itemsFor(eidolonId) {
   return state.data.items.filter((item) => item.eidolon_id === eidolonId);
 }
@@ -109,7 +156,7 @@ function emptyForView(viewName) {
 
 function renderStats() {
   const summary = state.data.summary;
-  stats.innerHTML = [
+  const groups = [
     statGroup("Eidolon", [
       stat(summary.eidolons, "Total"),
       stat(summary.owned, "Owned"),
@@ -125,7 +172,17 @@ function renderStats() {
       stat(summary.items_active, "Active"),
       stat(summary.items_completed, "Completed"),
     ]),
-  ].join("");
+  ];
+  if (summary.collections_total !== undefined) {
+    groups.push(
+      statGroup("Collection", [
+        stat(summary.collections_total, "Total"),
+        stat(summary.collections_three_star, "3 Star"),
+        stat(summary.collections_four_star, "4 Star"),
+      ]),
+    );
+  }
+  stats.innerHTML = groups.join("");
 }
 
 function renderProfiles() {
@@ -176,12 +233,16 @@ function renderQuickSetup() {
 function quickSetupRow(eidolon) {
   const owned = Boolean(eidolon.owned);
   const currentTier = owned ? (eidolon.completed ? "completed" : Number(eidolon.current_wish_tier || 1)) : 0;
+  const starRating = owned ? Math.max(1, Number(eidolon.star_rating || 0)) : 0;
   return `
     <div class="quick-setup-row" data-eidolon-id="${eidolon.id}">
       <label class="quick-setup-owned">
         <input type="checkbox" ${owned ? "checked" : ""}>
         <span>${escapeHtml(eidolon.name)}</span>
       </label>
+      <div class="quick-setup-stars" role="group" aria-label="${escapeHtml(eidolon.name)} stars">
+        ${starLabels.map((label, index) => quickSetupStarButton(label, index + 1, starRating, owned)).join("")}
+      </div>
       <div class="quick-setup-tiers" role="group" aria-label="${escapeHtml(eidolon.name)} wish tier">
         ${wishTierLabels.map((label, index) => quickSetupTierButton(label, index + 1, currentTier, owned)).join("")}
       </div>
@@ -248,6 +309,7 @@ function render() {
   if (state.view === "eidolons") renderEidolons();
   if (state.view === "shopping") renderShopping();
   if (state.view === "items") renderConsolidatedItems();
+  if (state.view === "collections") renderCollections();
 }
 
 function renderEidolons() {
@@ -287,6 +349,86 @@ function renderConsolidatedItems() {
       </section>
     `
     : empty(emptyForView("items"));
+}
+
+function renderCollections() {
+  const collections = (state.data.collections || [])
+    .filter(matchesCollectionProgress)
+    .filter(matchesCollection)
+    .sort((a, b) => {
+      const labelCompare = (a.effect_group_label || "").localeCompare(b.effect_group_label || "");
+      if (labelCompare) return labelCompare;
+      return Number(a.active_star_level || 0) - Number(b.active_star_level || 0);
+    });
+  const groups = new Map();
+  collections.forEach((collection) => {
+    const key = collection.effect_group_key || normalize(collection.effect_group_label || "Other");
+    if (!groups.has(key)) {
+      groups.set(key, { label: collection.effect_group_label || "Other", rows: [] });
+    }
+    groups.get(key).rows.push(collection);
+  });
+  content.innerHTML = groups.size
+    ? `<section class="collections">${[...groups.values()].map(collectionSection).join("")}</section>`
+    : empty(emptyForView("collections"));
+}
+
+function collectionSection(group) {
+  return `
+    <section class="collection-section">
+      <h2 class="collection-section-title">${escapeHtml(collectionGroupTitle(group))}</h2>
+      <div class="collection-rows">
+        ${group.rows.map(collectionRow).join("")}
+      </div>
+    </section>
+  `;
+}
+
+function collectionRow(collection) {
+  const classes = ["collection-row"];
+  if (collection.four_star_active) classes.push("complete");
+  const members = [...(collection.members || [])];
+  while (members.length < 3) {
+    members.push(null);
+  }
+  return `
+    <article class="${classes.join(" ")}">
+      ${members.map(collectionMemberRow).join("")}
+      <div class="collection-row-tier ${collection.three_star_active ? "active" : ""}">
+        <strong>3*</strong>
+        <span>${escapeHtml(collectionStatValue(collection.three_star_text))}</span>
+      </div>
+      <div class="collection-row-tier ${collection.four_star_active ? "active" : ""}">
+        <strong>4*</strong>
+        <span>${escapeHtml(collectionStatValue(collection.four_star_text))}</span>
+      </div>
+    </article>
+  `;
+}
+
+function collectionMemberRow(member) {
+  if (!member) {
+    return `<div class="collection-member placeholder"></div>`;
+  }
+  const classes = ["collection-member"];
+  if (member.owned) classes.push("owned");
+  if (Number(member.star_rating || 0) >= 4) classes.push("maxed");
+  const name = member.detail_url ? externalLink(member.name, member.detail_url) : escapeHtml(member.name);
+  return `
+    <div class="${classes.join(" ")}">
+      <div class="collection-member-name">${name}</div>
+    </div>
+  `;
+}
+
+function collectionTierRow(level, text, active) {
+  if (!text) return "";
+  return `
+    <div class="collection-tier ${active ? "active" : ""}">
+      <strong>${level}*</strong>
+      <span>${escapeHtml(text)}</span>
+    </div>
+  `;
 }
 
 function consolidatedItems() {
@@ -457,6 +599,17 @@ function itemRow(item) {
   `;
 }
 
+function quickSetupStarButton(label, value, currentStar, owned) {
+  return `
+    <button
+      type="button"
+      class="${Number(currentStar) === value ? "active" : ""}"
+      data-star="${value}"
+      ${owned ? "" : "disabled"}
+    >${label}★</button>
+  `;
+}
+
 function itemIcon(imageUrl, qualityCode) {
   const qualityAttr = qualityCode ? ` data-quality="${escapeHtml(String(qualityCode))}"` : "";
   if (imageUrl) {
@@ -506,6 +659,7 @@ function escapeHtml(value) {
 
 window.setOwned = (id, owned) => post(`/api/eidolons/${id}`, { owned });
 window.setCompleted = (id, completed) => post(`/api/eidolons/${id}`, { completed });
+window.setStar = (id, star_rating) => post(`/api/eidolons/${id}`, { star_rating });
 window.setCharacterNote = (id, character_note) => post(`/api/eidolons/${id}`, { character_note });
 window.setItem = (id, completed) => post(`/api/items/${id}`, { completed });
 
@@ -585,6 +739,8 @@ async function shutdownApplication() {
 
 const settingConfirmations = {
   own_all: "Mark every Eidolon as owned?",
+  star_all_1: "Set every Eidolon to at least 1 star and mark them owned?",
+  star_all_4: "Set every Eidolon to 4 stars and mark them owned?",
   complete_all: "Mark every Eidolon and every wish item as complete?",
   clear_wishes: "Clear every wish item check and completed Eidolon flag?",
   starter_only: "Reset ownership to only the starter 6 and clear every wish check?",
@@ -642,19 +798,25 @@ quickSetupList.addEventListener("change", (event) => {
   if (!event.target.matches('input[type="checkbox"]')) return;
   const row = event.target.closest(".quick-setup-row");
   const isOwned = event.target.checked;
-  row.querySelectorAll("[data-tier]").forEach((button) => {
+  row.querySelectorAll("[data-tier], [data-star]").forEach((button) => {
     button.disabled = !isOwned;
-    button.classList.toggle("active", isOwned && button.dataset.tier === "1");
+    if (!isOwned) {
+      button.classList.remove("active");
+      return;
+    }
+    if (button.dataset.tier) button.classList.toggle("active", button.dataset.tier === "1");
+    if (button.dataset.star) button.classList.toggle("active", button.dataset.star === "1");
   });
 });
 
 quickSetupList.addEventListener("click", (event) => {
-  const tierButton = event.target.closest("[data-tier]");
-  if (!tierButton || tierButton.disabled) return;
-  const row = tierButton.closest(".quick-setup-row");
-  const wasActive = tierButton.classList.contains("active");
-  row.querySelectorAll("[data-tier]").forEach((button) => button.classList.remove("active"));
-  if (!wasActive) tierButton.classList.add("active");
+  const toggleButton = event.target.closest("[data-tier], [data-star]");
+  if (!toggleButton || toggleButton.disabled) return;
+  const row = toggleButton.closest(".quick-setup-row");
+  const selector = toggleButton.dataset.tier ? "[data-tier]" : "[data-star]";
+  const wasActive = toggleButton.classList.contains("active");
+  row.querySelectorAll(selector).forEach((button) => button.classList.remove("active"));
+  if (!wasActive) toggleButton.classList.add("active");
 });
 
 quickSetupList.addEventListener("mouseover", (event) => {
@@ -674,10 +836,13 @@ quickSetupApply.addEventListener("click", async () => {
   if (!confirmed) return;
   const eidolons = [...quickSetupList.querySelectorAll(".quick-setup-row")].map((row) => {
     const activeTier = row.querySelector("[data-tier].active");
+    const activeStar = row.querySelector("[data-star].active");
     const tierValue = activeTier ? activeTier.dataset.tier : "0";
+    const owned = row.querySelector('input[type="checkbox"]').checked;
     return {
       id: Number(row.dataset.eidolonId),
-      owned: row.querySelector('input[type="checkbox"]').checked,
+      owned,
+      star_rating: owned ? Number(activeStar ? activeStar.dataset.star : 1) : 0,
       wish_tier: tierValue === "completed" ? 0 : Number(tierValue),
       completed: tierValue === "completed",
     };
@@ -728,6 +893,7 @@ progressFilter.addEventListener("change", () => {
   state.progressFilter = progressFilter.value;
   render();
 });
+
 
 themeToggle.addEventListener("click", () => {
   const current = document.documentElement.dataset.theme || "light";
