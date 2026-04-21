@@ -3,6 +3,7 @@ const state = {
   search: "",
   progressFilter: "incomplete",
   data: null,
+  eidolonOpen: {},
 };
 
 const content = document.querySelector("#content");
@@ -337,7 +338,13 @@ function renderEidolons() {
       return Boolean(eidolon.owned) && !eidolon.completed && Number(eidolon.current_wish_tier || 0) > 0;
     })
     .filter((eidolon) => matchesEidolon(eidolon, filteredWishItemsFor(eidolon.id)))
-    .map((eidolon) => eidolonBlock(eidolon, filteredWishItemsFor(eidolon.id), { collapsed: true, showDone: true }));
+    .map((eidolon) =>
+      eidolonBlock(eidolon, filteredWishItemsFor(eidolon.id), {
+        collapsed: true,
+        expanded: isEidolonExpanded(eidolon.id),
+        showDone: true,
+      }),
+    );
   content.innerHTML = blocks.length ? blocks.join("") : empty(emptyForView("Eidolons"));
 }
 
@@ -520,6 +527,15 @@ function formatQty(value) {
   return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, "");
 }
 
+function eidolonOpenKey(eidolonId) {
+  const profileId = state.data?.current_profile_id || 0;
+  return `${profileId}:${eidolonId}`;
+}
+
+function isEidolonExpanded(eidolonId) {
+  return Boolean(state.eidolonOpen[eidolonOpenKey(eidolonId)]);
+}
+
 function eidolonBlock(eidolon, items, options = {}) {
   const completedWishes = eidolon.completed_wish_count || 0;
   const totalWishes = eidolon.wish_count || 0;
@@ -539,7 +555,7 @@ function eidolonBlock(eidolon, items, options = {}) {
   `;
   if (options.collapsed) {
     return `
-      <details class="eidolon eidolon-collapsible">
+      <details class="eidolon eidolon-collapsible" data-eidolon-id="${eidolon.id}" ${options.expanded ? "open" : ""}>
         <summary>${header}</summary>
         ${body}
       </details>
@@ -912,6 +928,12 @@ content.addEventListener("click", (event) => {
     if (link) window.open(link.href, "_blank", "noreferrer");
   }
 });
+
+content.addEventListener("toggle", (event) => {
+  const details = event.target.closest(".eidolon-collapsible");
+  if (!details) return;
+  state.eidolonOpen[eidolonOpenKey(Number(details.dataset.eidolonId || 0))] = details.open;
+}, true);
 
 search.addEventListener("input", () => {
   state.search = search.value;
