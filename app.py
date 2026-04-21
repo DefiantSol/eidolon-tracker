@@ -2166,6 +2166,7 @@ def main() -> None:
         help="Rebuild from the full reference workbook and infer completed rows from the live workbook.",
     )
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--browser", action="store_true", help="Open the tracker URL in a browser after startup.")
     args = parser.parse_args()
 
     if args.merge_live_progress:
@@ -2229,8 +2230,6 @@ def main() -> None:
         if is_address_in_use_error(exc):
             if tracker_server_running(args.host, args.port):
                 safe_print(f"Eidolon tracker is already running at {url}")
-                if not args.no_browser:
-                    webbrowser.open(url)
                 return
             raise SystemExit(
                 f"Port {args.port} is already in use by another app. "
@@ -2239,7 +2238,9 @@ def main() -> None:
         raise
 
     safe_print(f"Eidolon tracker running at {url}")
-    if not args.no_browser:
+    should_open_browser = args.browser and not args.no_browser
+
+    if should_open_browser:
         webbrowser.open(url)
     try:
         server.serve_forever()

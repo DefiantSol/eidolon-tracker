@@ -280,6 +280,7 @@ dialog::backdrop {
 .settings-panel,
 .confirm-panel,
 .quick-setup-panel {
+  position: relative;
   display: grid;
   gap: 0;
 }
@@ -467,13 +468,17 @@ dialog::backdrop {
   opacity: 0.42;
 }
 
-.quick-setup-tiers button[data-tooltip]:hover::after,
-.quick-setup-tiers button[data-tooltip]:focus-visible::after {
+.quick-setup-actions {
+  display: flex;
+  justify-content: end;
+  gap: 8px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--line);
+}
+
+.quick-setup-tooltip {
   position: absolute;
-  right: 0;
-  bottom: calc(100% + 8px);
-  z-index: 2000;
-  width: max-content;
+  z-index: 3000;
   max-width: min(320px, 80vw);
   padding: 9px 11px;
   border: 1px solid var(--line);
@@ -481,21 +486,12 @@ dialog::backdrop {
   background: var(--panel);
   box-shadow: var(--shadow);
   color: var(--ink);
-  content: attr(data-tooltip);
   font-size: 0.82rem;
   font-weight: 600;
   line-height: 1.35;
   text-align: left;
   white-space: pre-line;
   pointer-events: none;
-}
-
-.quick-setup-actions {
-  display: flex;
-  justify-content: end;
-  gap: 8px;
-  padding: 14px 18px;
-  border-top: 1px solid var(--line);
 }
 
 .confirm-panel {

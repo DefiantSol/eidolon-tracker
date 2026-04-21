@@ -17,6 +17,7 @@ const settingsToggle = document.querySelector("#settingsToggle");
 const settingsDialog = document.querySelector("#settingsDialog");
 const quickSetupOpen = document.querySelector("#quickSetupOpen");
 const quickSetupDialog = document.querySelector("#quickSetupDialog");
+const quickSetupPanel = quickSetupDialog.querySelector(".quick-setup-panel");
 const quickSetupSearch = document.querySelector("#quickSetupSearch");
 const quickSetupList = document.querySelector("#quickSetupList");
 const quickSetupApply = document.querySelector("#quickSetupApply");
@@ -28,6 +29,10 @@ const confirmDialog = document.querySelector("#confirmDialog");
 const confirmMessage = document.querySelector("#confirmMessage");
 const wishTierLabels = ["I", "II", "III", "IV", "V", "VI", "Done"];
 const starLabels = ["1", "2", "3", "4"];
+const quickSetupTooltipEl = document.createElement("div");
+quickSetupTooltipEl.className = "quick-setup-tooltip";
+quickSetupTooltipEl.hidden = true;
+quickSetupPanel.appendChild(quickSetupTooltipEl);
 
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
@@ -291,10 +296,23 @@ function quickSetupTooltip(row, tierValue) {
 function showQuickSetupTooltip(button) {
   const row = button.closest(".quick-setup-row");
   const tooltipData = quickSetupTooltip(row, button.dataset.tier);
-  button.setAttribute(
-    "data-tooltip",
-    `${tooltipData.title}\n${tooltipData.items.map((item) => `- ${item}`).join("\n")}`,
-  );
+  quickSetupTooltipEl.textContent = `${tooltipData.title}\n${tooltipData.items.map((item) => `- ${item}`).join("\n")}`;
+  quickSetupTooltipEl.hidden = false;
+  const rect = button.getBoundingClientRect();
+  const panelRect = quickSetupPanel.getBoundingClientRect();
+  const tipRect = quickSetupTooltipEl.getBoundingClientRect();
+  const maxLeft = Math.max(8, panelRect.width - tipRect.width - 8);
+  const left = Math.max(8, Math.min(rect.right - panelRect.left - tipRect.width, maxLeft));
+  let top = rect.bottom - panelRect.top + 8;
+  if (top + tipRect.height > panelRect.height - 8) {
+    top = Math.max(8, rect.top - panelRect.top - tipRect.height - 8);
+  }
+  quickSetupTooltipEl.style.left = `${left}px`;
+  quickSetupTooltipEl.style.top = `${top}px`;
+}
+
+function hideQuickSetupTooltip() {
+  quickSetupTooltipEl.hidden = true;
 }
 
 function render() {
@@ -819,16 +837,27 @@ quickSetupList.addEventListener("click", (event) => {
   if (!wasActive) toggleButton.classList.add("active");
 });
 
-quickSetupList.addEventListener("mouseover", (event) => {
+quickSetupList.addEventListener("pointerover", (event) => {
   const tierButton = event.target.closest("[data-tier]");
   if (!tierButton) return;
   showQuickSetupTooltip(tierButton);
+});
+
+quickSetupList.addEventListener("pointerout", (event) => {
+  const tierButton = event.target.closest("[data-tier]");
+  if (!tierButton) return;
+  if (event.relatedTarget && tierButton.contains(event.relatedTarget)) return;
+  hideQuickSetupTooltip();
 });
 
 quickSetupList.addEventListener("focusin", (event) => {
   const tierButton = event.target.closest("[data-tier]");
   if (!tierButton) return;
   showQuickSetupTooltip(tierButton);
+});
+
+quickSetupList.addEventListener("focusout", (event) => {
+  if (event.target.closest("[data-tier]")) hideQuickSetupTooltip();
 });
 
 quickSetupApply.addEventListener("click", async () => {
