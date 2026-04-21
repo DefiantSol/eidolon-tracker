@@ -80,6 +80,18 @@ def load_items(data_dir: Path) -> dict[int, str]:
     return items
 
 
+def load_item_quality_codes(data_dir: Path) -> dict[int, str]:
+    quality_by_id: dict[int, str] = {}
+    for raw in (data_dir / "item.ini").read_text(encoding="utf-8", errors="ignore").splitlines():
+        cols = split_row(raw)
+        if len(cols) <= 17 or not cols[0].isdigit():
+            continue
+        quality = cols[17].strip()
+        if quality.isdigit():
+            quality_by_id[int(cols[0])] = quality
+    return quality_by_id
+
+
 def load_partners(data_dir: Path) -> dict[int, ClientPartner]:
     partners: dict[int, ClientPartner] = {}
     for raw in (data_dir / "t_partner.ini").read_text(encoding="utf-8", errors="ignore").splitlines():
@@ -197,6 +209,13 @@ def numeric_quantity(value: str) -> float | None:
         return float(value)
     except ValueError:
         return None
+
+
+def item_quality_code_for_ids(item_ids: list[int], quality_by_id: dict[int, str]) -> str:
+    codes = {quality_by_id[item_id] for item_id in item_ids if item_id in quality_by_id}
+    if len(codes) == 1:
+        return next(iter(codes))
+    return ""
 
 
 def workbook_item_key(name: str) -> str:
@@ -379,7 +398,12 @@ def map_seed_entries(seed: dict, partners: dict[int, ClientPartner]) -> dict[int
     return matched
 
 
-def sync_seed_wishes(seed_path: Path, partners: dict[int, ClientPartner], wishes_by_partner: dict[int, list[ClientWish]]) -> None:
+def sync_seed_wishes(
+    seed_path: Path,
+    partners: dict[int, ClientPartner],
+    wishes_by_partner: dict[int, list[ClientWish]],
+    quality_by_id: dict[int, str],
+) -> None:
     seed = json.loads(seed_path.read_text(encoding="utf-8"))
     matched = map_seed_entries(seed, partners)
     updated_eidolons = 0
@@ -421,6 +445,11 @@ def sync_seed_wishes(seed_path: Path, partners: dict[int, ClientPartner], wishes
             seed_item["client_wish_level"] = client_wish.level
             seed_item["client_item_ids"] = client_item.ids
             seed_item["client_item_name"] = client_item.name
+            quality_code = item_quality_code_for_ids(client_item.ids, quality_by_id)
+            if quality_code:
+                seed_item["item_quality_code"] = quality_code
+            else:
+                seed_item.pop("item_quality_code", None)
             if len(client_item.ids) == 1:
                 seed_item["client_item_id"] = client_item.ids[0]
                 seed_item["detail_url"] = client_item_link(client_item.ids[0], client_item.name)
@@ -446,8 +475,16 @@ def sync_seed_wishes(seed_path: Path, partners: dict[int, ClientPartner], wishes
     print(f"Matched Eidolons without client wishes: {missing_wishes}")
 
 
-def sync_seed_workbook(seed_path: Path, workbook_path: Path) -> None:
+def sync_seed_workbook(
+    seed_path: Path,
+    workbook_path: Path,
+    partners: dict[int, ClientPartner],
+    wishes_by_partner: dict[int, list[ClientWish]],
+    quality_by_id: dict[int, str],
+) -> None:
     seed = json.loads(seed_path.read_text(encoding="utf-8"))
+    matched = map_seed_entries(seed, partners)
+    partner_by_eidolon = {eidolon["name"]: partner_id for partner_id, eidolon in matched.items()}
     workbook_eidolons = {
         eidolon["name"]: eidolon
         for eidolon in app.extract_eidolons(workbook_path)
@@ -463,37 +500,77 @@ def sync_seed_workbook(seed_path: Path, workbook_path: Path) -> None:
             continue
 
         workbook_items = workbook_eidolon.get("items", [])
-        available_by_name: dict[str, list[dict]] = {}
-        for item in workbook_items:
-            available_by_name.setdefault(workbook_item_key(item["item"]), []).append(item)
+        existing_items = list(eidolon.get("items", []))
+        partner_id = partner_by_eidolon.get(eidolon["name"])
+        client_items = flatten_client_items_for_seed(wishes_by_partner.get(partner_id, [])) if partner_id else []
+        client_by_name: dict[str, list[tuple[str, ClientWish, ClientItem]]] = {}
+        for client_entry in client_items:
+            client_by_name.setdefault(workbook_item_key(client_entry[2].name), []).append(client_entry)
+        preserved_by_item_name: dict[str, list[dict]] = {}
+        for item in existing_items:
+            item_name = workbook_item_key(item.get("item", ""))
+            if item_name:
+                preserved_by_item_name.setdefault(item_name, []).append(item)
 
         new_items = []
         changed = False
-        for index, seed_item in enumerate(eidolon.get("items", [])):
-            workbook_item = None
-            candidates = available_by_name.get(workbook_item_key(seed_item.get("item", "")), [])
-            if candidates:
-                workbook_item = candidates.pop(0)
-            elif index < len(workbook_items):
-                workbook_item = workbook_items[index]
-
-            merged_item = dict(seed_item)
-            if workbook_item:
-                merged_item["wish_group"] = workbook_item.get("wish_group", "")
-                merged_item["item"] = workbook_item["item"]
-                merged_item["quantity_text"] = workbook_item["quantity_text"] or "1"
-                merged_item["quantity_value"] = workbook_item.get("quantity_value")
-                merged_item["how_to_obtain"] = workbook_item.get("how_to_obtain", "")
-                merged_item["source_row"] = workbook_item["source_row"]
+        for index, workbook_item in enumerate(workbook_items):
+            key = workbook_item_key(workbook_item["item"])
+            preserved_item = None
+            client_entry = None
+            client_candidates = client_by_name.get(key, [])
+            if client_candidates:
+                client_entry = client_candidates.pop(0)
+            item_candidates = preserved_by_item_name.get(key, [])
+            if item_candidates:
+                preserved_item = item_candidates.pop(0)
+            elif index < len(existing_items):
+                preserved_item = existing_items[index]
+            merged_item = dict(preserved_item or {
+                "image_url": "",
+                "detail_url": "",
+            })
+            before = dict(merged_item)
+            merged_item["wish_group"] = workbook_item.get("wish_group", "")
+            merged_item["item"] = workbook_item["item"]
+            merged_item["quantity_text"] = workbook_item["quantity_text"] or "1"
+            merged_item["quantity_value"] = workbook_item.get("quantity_value")
+            merged_item["how_to_obtain"] = workbook_item.get("how_to_obtain", "")
+            merged_item["source_row"] = workbook_item["source_row"]
+            merged_item["sort_order"] = index
+            if client_entry:
+                wish_group, client_wish, client_item = client_entry
+                merged_item["client_wish_level"] = client_wish.level
+                merged_item["client_item_ids"] = client_item.ids
+                merged_item["client_item_name"] = client_item.name
+                quality_code = item_quality_code_for_ids(client_item.ids, quality_by_id)
+                if quality_code:
+                    merged_item["item_quality_code"] = quality_code
+                else:
+                    merged_item.pop("item_quality_code", None)
+                if len(client_item.ids) == 1:
+                    merged_item["client_item_id"] = client_item.ids[0]
+                    merged_item["detail_url"] = client_item_link(client_item.ids[0], client_item.name)
+                else:
+                    merged_item.pop("client_item_id", None)
+                    if not merged_item.get("detail_url"):
+                        merged_item["detail_url"] = client_item_link(client_item.ids[0], client_item.name)
             else:
-                unmatched_seed_items += 1
-            if merged_item != seed_item:
+                preserved_ids = merged_item.get("client_item_ids") or (
+                    [merged_item["client_item_id"]] if merged_item.get("client_item_id") else []
+                )
+                quality_code = item_quality_code_for_ids(preserved_ids, quality_by_id)
+                if quality_code:
+                    merged_item["item_quality_code"] = quality_code
+            if merged_item != before:
                 updated_items += 1
                 changed = True
             new_items.append(merged_item)
 
-        for remaining in available_by_name.values():
-            workbook_only_items += len(remaining)
+        if len(existing_items) > len(workbook_items):
+            unmatched_seed_items += len(existing_items) - len(workbook_items)
+        elif len(workbook_items) > len(existing_items):
+            workbook_only_items += len(workbook_items) - len(existing_items)
         eidolon["items"] = new_items
         if changed:
             updated_eidolons += 1
@@ -723,15 +800,16 @@ def main() -> None:
         parser.error(f"--data-dir is required unless {CLIENT_DATA_ENV} is set.")
 
     item_names = load_items(args.data_dir)
+    quality_by_id = load_item_quality_codes(args.data_dir)
     partners = load_partners(args.data_dir)
     wishes_by_partner = load_wishes(args.data_dir, item_names)
     report(partners, wishes_by_partner)
     if args.sync_db_assets:
         sync_db_assets(partners, wishes_by_partner)
     if args.sync_seed_wishes:
-        sync_seed_wishes(args.seed_path, partners, wishes_by_partner)
+        sync_seed_wishes(args.seed_path, partners, wishes_by_partner, quality_by_id)
     if args.sync_seed_workbook:
-        sync_seed_workbook(args.seed_path, args.workbook)
+        sync_seed_workbook(args.seed_path, args.workbook, partners, wishes_by_partner, quality_by_id)
     if args.sync_seed_google_sheet:
         if not args.google_sheet_url:
             parser.error("--google-sheet-url is required with --sync-seed-google-sheet.")

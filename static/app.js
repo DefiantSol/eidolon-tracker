@@ -299,6 +299,7 @@ function consolidatedItems() {
         item: item.item,
         image_url: item.image_url,
         detail_url: item.detail_url,
+        item_quality_code: item.item_quality_code || "",
         totalQty: 0,
         remainingQty: 0,
         entries: [],
@@ -310,6 +311,7 @@ function consolidatedItems() {
     if (!item.completed) group.remainingQty += quantity;
     if (!group.image_url && item.image_url) group.image_url = item.image_url;
     if (!group.detail_url && item.detail_url) group.detail_url = item.detail_url;
+    if (!group.item_quality_code && item.item_quality_code) group.item_quality_code = item.item_quality_code;
     group.entries.push({
       eidolon: item.eidolon_name,
       quantity,
@@ -336,7 +338,7 @@ function consolidatedRow(group) {
   return `
     <div class="consolidated-row ${group.remainingQty === 0 ? "complete" : ""}">
       <div class="consolidated-item">
-        ${group.image_url ? `<img class="item-icon" src="${escapeHtml(group.image_url)}" alt="">` : `<span class="item-icon placeholder"></span>`}
+        ${itemIcon(group.image_url, group.item_quality_code)}
         <strong>${group.detail_url ? externalLink(group.item, group.detail_url) : escapeHtml(group.item)}</strong>
       </div>
       <div class="consolidated-qty">${formatQty(group.remainingQty)} / ${formatQty(group.totalQty)}</div>
@@ -440,7 +442,7 @@ function itemRow(item) {
       <div class="group">${escapeHtml(groupLabel)}</div>
       <div>
         <div class="item-name">
-          ${item.image_url ? `<img class="item-icon" src="${escapeHtml(item.image_url)}" alt="">` : `<span class="item-icon placeholder"></span>`}
+          ${itemIcon(item.image_url, item.item_quality_code)}
           <strong>${item.detail_url ? externalLink(item.item, item.detail_url) : escapeHtml(item.item)}</strong>
         </div>
       </div>
@@ -453,6 +455,14 @@ function itemRow(item) {
       </div>
     </div>
   `;
+}
+
+function itemIcon(imageUrl, qualityCode) {
+  const qualityAttr = qualityCode ? ` data-quality="${escapeHtml(String(qualityCode))}"` : "";
+  if (imageUrl) {
+    return `<img class="item-icon" src="${escapeHtml(imageUrl)}" alt=""${qualityAttr}>`;
+  }
+  return `<span class="item-icon placeholder"${qualityAttr}></span>`;
 }
 
 function eidolonImage(eidolon) {

@@ -33,7 +33,7 @@ SEED_PATH = DATA_DIR / "seed.json"
 IMAGE_CACHE = STATIC / "img"
 DB_PATH = APP_DIR / "tracker.db"
 SHEET_NAME = "Eidolon"
-SEED_DATA_VERSION = "client-wishes-workbook-20260420b"
+SEED_DATA_VERSION = "client-wishes-quality-20260420b"
 AKDB_BASE = "https://www.aurakingdom-db.com"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) EidolonTracker/1.0"
 STARTER_EIDOLON_NAMES = ("Serif (Adam)", "Merrilee (Eve)", "Grimm (Zhulong)", "Alessa", "Ahri", "Sendama")
@@ -121,6 +121,7 @@ def init_db() -> None:
                 eidolon_id INTEGER NOT NULL REFERENCES eidolons(id) ON DELETE CASCADE,
                 wish_group TEXT NOT NULL,
                 item TEXT NOT NULL,
+                item_quality_code TEXT NOT NULL DEFAULT '',
                 quantity_text TEXT NOT NULL,
                 quantity_value REAL,
                 how_to_obtain TEXT NOT NULL,
@@ -142,6 +143,7 @@ def init_db() -> None:
         ensure_column(conn, "eidolons", "detail_url", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "eidolons", "character_note", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "eidolons", "profile_id", "INTEGER NOT NULL DEFAULT 1")
+        ensure_column(conn, "wish_items", "item_quality_code", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "wish_items", "image_url", "TEXT NOT NULL DEFAULT ''")
         ensure_column(conn, "wish_items", "detail_url", "TEXT NOT NULL DEFAULT ''")
         ensure_profile_schema(conn)
@@ -307,15 +309,16 @@ def insert_seed_data(conn: sqlite3.Connection, seed: dict, profile_id: int) -> N
             conn.execute(
                 """
                 INSERT INTO wish_items (
-                    eidolon_id, wish_group, item, quantity_text, quantity_value,
+                    eidolon_id, wish_group, item, item_quality_code, quantity_text, quantity_value,
                     how_to_obtain, source_row, sort_order, image_url, detail_url
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     eidolon_id,
                     item.get("wish_group", ""),
                     item["item"],
+                    item.get("item_quality_code", ""),
                     item["quantity_text"],
                     item.get("quantity_value"),
                     item.get("how_to_obtain", ""),
@@ -1125,15 +1128,16 @@ def import_workbook(workbook_path: Path, force: bool = False) -> dict[str, int]:
                 conn.execute(
                     """
                     INSERT INTO wish_items (
-                        eidolon_id, wish_group, item, quantity_text, quantity_value,
+                        eidolon_id, wish_group, item, item_quality_code, quantity_text, quantity_value,
                         how_to_obtain, source_row, sort_order
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         eidolon_id,
                         item["wish_group"],
                         item["item"],
+                        item.get("item_quality_code", ""),
                         item["quantity_text"],
                         item["quantity_value"],
                         item["how_to_obtain"],
@@ -1257,15 +1261,16 @@ def refresh_seed_data(force: bool = False) -> dict[str, int]:
                     item_cursor = conn.execute(
                         """
                         INSERT INTO wish_items (
-                            eidolon_id, wish_group, item, quantity_text, quantity_value,
+                            eidolon_id, wish_group, item, item_quality_code, quantity_text, quantity_value,
                             how_to_obtain, source_row, sort_order, image_url, detail_url
                         )
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
                         (
                             eidolon_id,
                             item.get("wish_group", ""),
                             item["item"],
+                            item.get("item_quality_code", ""),
                             item["quantity_text"],
                             item.get("quantity_value"),
                             item.get("how_to_obtain", ""),
@@ -1343,15 +1348,16 @@ def rebuild_from_reference(reference_path: Path, live_path: Path) -> dict[str, i
                 item_cursor = conn.execute(
                     """
                     INSERT INTO wish_items (
-                        eidolon_id, wish_group, item, quantity_text, quantity_value,
+                        eidolon_id, wish_group, item, item_quality_code, quantity_text, quantity_value,
                         how_to_obtain, source_row, sort_order, image_url, detail_url
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         eidolon_id,
                         item["wish_group"],
                         item["item"],
+                        item.get("item_quality_code", ""),
                         item["quantity_text"],
                         item["quantity_value"],
                         item["how_to_obtain"],
