@@ -10,3 +10,5 @@ build/
 dist/
 *.spec
 .private/
+data/AKTO References.xlsx
+data/AKTO References (Compilation).xlsx

@@ -33,6 +33,7 @@ SEED_PATH = DATA_DIR / "seed.json"
 IMAGE_CACHE = STATIC / "img"
 DB_PATH = APP_DIR / "tracker.db"
 SHEET_NAME = "Eidolon"
+SEED_DATA_VERSION = "client-wishes-workbook-20260420b"
 AKDB_BASE = "https://www.aurakingdom-db.com"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) EidolonTracker/1.0"
 STARTER_EIDOLON_NAMES = ("Serif (Adam)", "Merrilee (Eve)", "Grimm (Zhulong)", "Alessa", "Ahri", "Sendama")
@@ -240,6 +241,14 @@ def seed_database(force: bool = False) -> dict[str, int]:
         seed = json.loads(SEED_PATH.read_text(encoding="utf-8"))
         reset_profile_data(conn, profile_id)
         insert_seed_data(conn, seed, profile_id)
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value)
+            VALUES ('seed_data_version', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (SEED_DATA_VERSION,),
+        )
         return profile_counts(conn, profile_id)
 
 
@@ -494,8 +503,39 @@ def cell_column(cell_ref: str) -> str:
     return match.group(0) if match else ""
 
 
+def cell_row(cell_ref: str) -> int:
+    match = re.search(r"\d+", cell_ref)
+    return int(match.group(0)) if match else 0
+
+
 def shared_text(si: ET.Element) -> str:
     return "".join(t.text or "" for t in si.findall(".//m:t", NS))
+
+
+def column_number(column: str) -> int:
+    number = 0
+    for char in column:
+        number = number * 26 + ord(char) - ord("A") + 1
+    return number
+
+
+def column_name(number: int) -> str:
+    chars = []
+    while number:
+        number, remainder = divmod(number - 1, 26)
+        chars.append(chr(ord("A") + remainder))
+    return "".join(reversed(chars))
+
+
+def merged_cells(root: ET.Element) -> list[tuple[str, int, str, int]]:
+    ranges = []
+    for merge in root.findall(".//m:mergeCells/m:mergeCell", NS):
+        ref = merge.attrib.get("ref", "")
+        if ":" not in ref:
+            continue
+        start, end = ref.split(":", 1)
+        ranges.append((cell_column(start), cell_row(start), cell_column(end), cell_row(end)))
+    return ranges
 
 
 def read_sheet_abcd(workbook_path: Path, sheet_name: str) -> dict[int, dict[str, str]]:
@@ -545,6 +585,16 @@ def read_sheet_abcd(workbook_path: Path, sheet_name: str) -> dict[int, dict[str,
                 values[column] = value.strip()
             if values:
                 rows[row_number] = values
+        for start_col, start_row, end_col, end_row in merged_cells(root):
+            source = rows.get(start_row, {}).get(start_col, "")
+            if not source:
+                continue
+            for column_index in range(column_number(start_col), column_number(end_col) + 1):
+                column = column_name(column_index)
+                if column not in {"A", "B", "C", "D"}:
+                    continue
+                for row_number in range(start_row, end_row + 1):
+                    rows.setdefault(row_number, {}).setdefault(column, source)
         return rows
 
 
@@ -1101,14 +1151,16 @@ def item_key(item_name: str) -> str:
     return normalize_name(item_name)
 
 
-def progress_snapshot(conn: sqlite3.Connection) -> dict:
-    profile_id = get_current_profile_id(conn)
+def progress_snapshot(conn: sqlite3.Connection, profile_id: int | None = None) -> dict:
+    if profile_id is None:
+        profile_id = get_current_profile_id(conn)
     eidolons = conn.execute("SELECT * FROM eidolons WHERE profile_id = ?", (profile_id,)).fetchall()
     items = conn.execute(
         """
         SELECT
             e.name AS eidolon_name,
             w.item,
+            w.sort_order,
             w.image_url,
             w.detail_url,
             COALESCE(p.completed, 0) AS completed
@@ -1139,7 +1191,105 @@ def progress_snapshot(conn: sqlite3.Connection) -> dict:
             }
             for row in items
         },
+        "items_by_order": {
+            (row["eidolon_name"], row["sort_order"]): {
+                "completed": row["completed"],
+                "image_url": row["image_url"],
+                "detail_url": row["detail_url"],
+            }
+            for row in items
+        },
     }
+
+
+def seed_refresh_needed(conn: sqlite3.Connection) -> bool:
+    row = conn.execute("SELECT value FROM app_settings WHERE key = 'seed_data_version'").fetchone()
+    return not row or row["value"] != SEED_DATA_VERSION
+
+
+def refresh_seed_data(force: bool = False) -> dict[str, int]:
+    init_db()
+    if not SEED_PATH.exists():
+        raise FileNotFoundError(f"Seed data not found: {SEED_PATH}")
+
+    with connect() as conn:
+        if not force and not seed_refresh_needed(conn):
+            return profile_counts(conn, get_current_profile_id(conn))
+
+        seed = json.loads(SEED_PATH.read_text(encoding="utf-8"))
+        profile_ids = [
+            row["id"]
+            for row in conn.execute("SELECT id FROM profiles ORDER BY id").fetchall()
+        ]
+        restored_completed = 0
+
+        for profile_id in profile_ids:
+            snapshot = progress_snapshot(conn, profile_id)
+            reset_profile_data(conn, profile_id)
+            for eidolon in seed["eidolons"]:
+                saved_eidolon = snapshot["eidolons"].get(eidolon["name"], {})
+                cursor = conn.execute(
+                    """
+                    INSERT INTO eidolons (
+                        profile_id, name, source_row, owned, completed, sort_order,
+                        image_url, icon_url, detail_url, character_note
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        profile_id,
+                        eidolon["name"],
+                        eidolon["source_row"],
+                        1 if eidolon["name"] in STARTER_EIDOLONS else saved_eidolon.get("owned", eidolon.get("owned", 0)),
+                        saved_eidolon.get("completed", eidolon.get("completed", 0)),
+                        eidolon["sort_order"],
+                        saved_eidolon.get("image_url") or eidolon.get("image_url", ""),
+                        saved_eidolon.get("icon_url") or eidolon.get("icon_url", ""),
+                        saved_eidolon.get("detail_url") or eidolon.get("detail_url", ""),
+                        saved_eidolon.get("character_note") or eidolon.get("character_note", ""),
+                    ),
+                )
+                eidolon_id = cursor.lastrowid
+                for item in eidolon["items"]:
+                    saved_item = snapshot["items"].get((eidolon["name"], item_key(item["item"])))
+                    if saved_item is None:
+                        saved_item = snapshot["items_by_order"].get((eidolon["name"], item["sort_order"]), {})
+                    item_cursor = conn.execute(
+                        """
+                        INSERT INTO wish_items (
+                            eidolon_id, wish_group, item, quantity_text, quantity_value,
+                            how_to_obtain, source_row, sort_order, image_url, detail_url
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            eidolon_id,
+                            item.get("wish_group", ""),
+                            item["item"],
+                            item["quantity_text"],
+                            item.get("quantity_value"),
+                            item.get("how_to_obtain", ""),
+                            item["source_row"],
+                            item["sort_order"],
+                            saved_item.get("image_url") or item.get("image_url", ""),
+                            saved_item.get("detail_url") or item.get("detail_url", ""),
+                        ),
+                    )
+                    if saved_item.get("completed"):
+                        conn.execute("INSERT INTO item_progress (item_id, completed) VALUES (?, 1)", (item_cursor.lastrowid,))
+                        restored_completed += 1
+
+        conn.execute(
+            """
+            INSERT INTO app_settings (key, value)
+            VALUES ('seed_data_version', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            """,
+            (SEED_DATA_VERSION,),
+        )
+        counts = profile_counts(conn, get_current_profile_id(conn))
+        counts["restored_completed_items"] = restored_completed
+        return counts
 
 
 def rebuild_from_reference(reference_path: Path, live_path: Path) -> dict[str, int]:
@@ -1281,17 +1431,26 @@ def apply_wish_metrics(eidolons: list[dict], items: list[dict]) -> None:
 
     for item in items:
         eidolon_id = item["eidolon_id"]
-        explicit_group = (item.get("wish_group") or "").strip()
-        if explicit_group:
-            current_groups[eidolon_id] = explicit_group
-            current_tiers[eidolon_id] = current_tiers.get(eidolon_id, 0) + 1
-        elif eidolon_id not in current_tiers:
-            current_tiers[eidolon_id] = 1
-        effective_group = current_groups.get(eidolon_id) or explicit_group or f"Item {item['sort_order'] + 1}"
+        raw_group = (item.get("wish_group") or "").strip()
+        previous_group = current_groups.get(eidolon_id, "")
+        starts_group = 0
+        if raw_group:
+            effective_group = raw_group
+            if raw_group != previous_group:
+                current_tiers[eidolon_id] = current_tiers.get(eidolon_id, 0) + 1
+                starts_group = 1
+            elif eidolon_id not in current_tiers:
+                current_tiers[eidolon_id] = 1
+                starts_group = 1
+            current_groups[eidolon_id] = raw_group
+        else:
+            if eidolon_id not in current_tiers:
+                current_tiers[eidolon_id] = 1
+            effective_group = previous_group or f"Item {item['sort_order'] + 1}"
         effective_tier = current_tiers.get(eidolon_id, 1)
         item["wish_group_effective"] = effective_group
         item["wish_tier"] = effective_tier
-        item["starts_wish_group"] = 1 if explicit_group else 0
+        item["starts_wish_group"] = starts_group
 
         key = (eidolon_id, effective_group)
         group = wish_groups.setdefault(
@@ -1816,12 +1975,12 @@ def main() -> None:
     else:
         if DB_PATH.exists() and not args.reimport:
             init_db()
-            with connect() as conn:
-                counts = profile_counts(conn, get_current_profile_id(conn))
+            counts = refresh_seed_data()
         else:
             counts = seed_database(force=args.reset_data)
         if args.reset_data:
             counts = seed_database(force=True)
+            counts = refresh_seed_data(force=True)
         safe_print(f"Loaded {counts['eidolons']} Eidolons and {counts['items']} wish items.")
     if args.sync_assets:
         asset_counts = sync_assets()

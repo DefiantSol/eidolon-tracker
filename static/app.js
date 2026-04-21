@@ -76,17 +76,32 @@ function itemsFor(eidolonId) {
   return state.data.items.filter((item) => item.eidolon_id === eidolonId);
 }
 
+function eidolonFor(item) {
+  return state.data.eidolons.find((eidolon) => eidolon.id === item.eidolon_id);
+}
+
+function isActiveWishItem(item) {
+  const eidolon = eidolonFor(item);
+  if (!eidolon || !eidolon.owned || eidolon.completed || item.completed) return false;
+  return Number(item.wish_tier) === Number(eidolon.current_wish_tier || 0);
+}
+
 function matchesProgressComplete(isComplete) {
+  if (state.progressFilter === "active") return !isComplete;
   if (state.progressFilter === "all") return true;
   if (state.progressFilter === "complete") return isComplete;
   return !isComplete;
 }
 
 function filteredWishItemsFor(eidolonId) {
-  return itemsFor(eidolonId).filter((item) => matchesProgressComplete(Boolean(item.completed)) && matchesItem(item));
+  return itemsFor(eidolonId).filter((item) => {
+    if (state.progressFilter === "active" && !isActiveWishItem(item)) return false;
+    return matchesProgressComplete(Boolean(item.completed)) && matchesItem(item);
+  });
 }
 
 function emptyForView(viewName) {
+  if (state.progressFilter === "active") return `No active ${viewName} match that search.`;
   if (state.progressFilter === "complete") return `No completed ${viewName} match that search.`;
   if (state.progressFilter === "all") return `No ${viewName} match that search.`;
   return `No incomplete ${viewName} match that search.`;
@@ -237,9 +252,12 @@ function render() {
 
 function renderEidolons() {
   const blocks = state.data.eidolons
-    .filter((eidolon) => matchesProgressComplete(Boolean(eidolon.completed)))
-    .filter((eidolon) => matchesEidolon(eidolon, itemsFor(eidolon.id)))
-    .map((eidolon) => eidolonBlock(eidolon, itemsFor(eidolon.id), { collapsed: true, showDone: true }));
+    .filter((eidolon) => {
+      if (state.progressFilter !== "active") return matchesProgressComplete(Boolean(eidolon.completed));
+      return Boolean(eidolon.owned) && !eidolon.completed && Number(eidolon.current_wish_tier || 0) > 0;
+    })
+    .filter((eidolon) => matchesEidolon(eidolon, filteredWishItemsFor(eidolon.id)))
+    .map((eidolon) => eidolonBlock(eidolon, filteredWishItemsFor(eidolon.id), { collapsed: true, showDone: true }));
   content.innerHTML = blocks.length ? blocks.join("") : empty(emptyForView("Eidolons"));
 }
 
@@ -274,6 +292,7 @@ function renderConsolidatedItems() {
 function consolidatedItems() {
   const groups = new Map();
   state.data.items.forEach((item) => {
+    if (state.progressFilter === "active" && !isActiveWishItem(item)) return;
     const key = normalize(item.item);
     if (!groups.has(key)) {
       groups.set(key, {
