@@ -11,6 +11,11 @@ python -m PyInstaller `
   --add-data "data;data" `
   app.py
 
+$releaseDb = Join-Path $PSScriptRoot "dist\EidolonTracker\tracker.db"
+if (Test-Path -LiteralPath $releaseDb) {
+  Remove-Item -LiteralPath $releaseDb -Force
+}
+
 Write-Host ""
 Write-Host "Built: $PSScriptRoot\dist\EidolonTracker\EidolonTracker.exe"
 Write-Host "Share the whole dist\EidolonTracker folder, not just the .exe."

@@ -57,6 +57,7 @@ class ClientPartner:
     partner_id: int
     title: str
     name: str
+    aliases: list[str]
 
 
 @dataclass
@@ -106,15 +107,31 @@ def load_item_quality_codes(data_dir: Path) -> dict[int, str]:
 
 
 def load_partners(data_dir: Path) -> dict[int, ClientPartner]:
+    alias_rows: dict[int, list[str]] = {}
+    partner_path = data_dir / "partner.ini"
+    if partner_path.exists():
+        for raw in partner_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            cols = split_row(raw)
+            if len(cols) < 5 or not cols[0].isdigit():
+                continue
+            values = [clean_text(cols[3]), clean_text(cols[4])]
+            alias_rows[int(cols[0])] = [value for value in values if value]
+
     partners: dict[int, ClientPartner] = {}
     for raw in (data_dir / "t_partner.ini").read_text(encoding="utf-8", errors="ignore").splitlines():
         cols = split_row(raw)
         if len(cols) < 3 or not cols[0].isdigit():
             continue
+        partner_id = int(cols[0])
+        aliases = []
+        for value in alias_rows.get(partner_id, []):
+            if value not in aliases:
+                aliases.append(value)
         partners[int(cols[0])] = ClientPartner(
-            partner_id=int(cols[0]),
+            partner_id=partner_id,
             title=clean_text(cols[1]),
             name=clean_text(cols[2]),
+            aliases=aliases,
         )
     return partners
 
@@ -378,8 +395,87 @@ def eidolon_detail_url(partner_id: int, name: str) -> str:
     return f"{app.AKDB_BASE}/eidolon/{partner_id}-{slug}" if slug else f"{app.AKDB_BASE}/eidolon/{partner_id}"
 
 
-def fetch_eidolon_wish_assets(partner_id: int, name: str) -> dict[int, dict[str, str]]:
-    data = app.fetch_url(eidolon_detail_url(partner_id, name))
+def unicode_name_key(value: str) -> str:
+    value = clean_text(value).lower()
+    value = value.replace("&", "and")
+    value = re.sub(r"[\s'\"()\-_.:]+", "", value)
+    return value
+
+
+def parse_tw_eidolon_list() -> dict[str, dict[str, str]]:
+    data = app.fetch_url(f"{app.AKDB_BASE}/tw/eidolons")
+    matches = re.finditer(
+        r'<a[^>]+href="(?P<href>/tw/eidolon/[^"]+)"[^>]*>(?P<name>.*?)</a>',
+        data,
+        re.S,
+    )
+    by_name: dict[str, dict[str, str]] = {}
+    for match in matches:
+        name = re.sub(r"<.*?>", "", match.group("name")).strip()
+        if not name or name == "Image":
+            continue
+        detail_url = f"{app.AKDB_BASE}{match.group('href')}"
+        key = unicode_name_key(name)
+        if key:
+            by_name[key] = {"name": html.unescape(name), "detail_url": detail_url}
+    return by_name
+
+
+def partner_name_candidates(partner: ClientPartner) -> list[str]:
+    ordered: list[str] = []
+    for value in [partner.name, partner.title, *partner.aliases]:
+        cleaned = clean_text(value)
+        if cleaned and cleaned not in ordered:
+            ordered.append(cleaned)
+    return ordered
+
+
+def resolve_eidolon_detail_url(
+    partner: ClientPartner,
+    eidolon_index: dict[str, dict[str, str]] | None = None,
+    tw_eidolon_index: dict[str, dict[str, str]] | None = None,
+) -> str:
+    candidates = partner_name_candidates(partner)
+    tried: list[str] = []
+    for candidate in candidates:
+        detail_url = eidolon_detail_url(partner.partner_id, candidate)
+        try:
+            assets = app.parse_detail_assets(detail_url)
+            if assets["icon_url"] or assets["image_url"]:
+                return detail_url
+        except Exception:
+            pass
+        tried.append(candidate)
+
+    if eidolon_index is None:
+        try:
+            eidolon_index = app.parse_eidolon_list()
+        except Exception:
+            eidolon_index = {}
+    if tw_eidolon_index is None:
+        try:
+            tw_eidolon_index = parse_tw_eidolon_list()
+        except Exception:
+            tw_eidolon_index = {}
+
+    for candidate in tried:
+        variants = app.eidolon_name_candidates(candidate) | {app.normalize_name(candidate), unicode_name_key(candidate)}
+        for variant in {variant for variant in variants if variant}:
+            match = eidolon_index.get(variant)
+            if not match:
+                match = tw_eidolon_index.get(variant)
+            if match:
+                return match["detail_url"]
+
+    raise ValueError(f"Could not resolve Eidolon detail page for partner {partner.partner_id} ({partner.name}).")
+
+
+def fetch_eidolon_wish_assets(
+    partner: ClientPartner,
+    eidolon_index: dict[str, dict[str, str]] | None = None,
+    tw_eidolon_index: dict[str, dict[str, str]] | None = None,
+) -> dict[int, dict[str, str]]:
+    data = app.fetch_url(resolve_eidolon_detail_url(partner, eidolon_index, tw_eidolon_index))
     wish_start = data.find("Eidolon Wishes")
     wish_html = data[wish_start:] if wish_start >= 0 else data
     assets: dict[int, dict[str, str]] = {}
@@ -398,8 +494,12 @@ def fetch_eidolon_wish_assets(partner_id: int, name: str) -> dict[int, dict[str,
     return assets
 
 
-def fetch_eidolon_assets(partner_id: int, name: str) -> dict[str, str]:
-    detail_url = eidolon_detail_url(partner_id, name)
+def fetch_eidolon_assets(
+    partner: ClientPartner,
+    eidolon_index: dict[str, dict[str, str]] | None = None,
+    tw_eidolon_index: dict[str, dict[str, str]] | None = None,
+) -> dict[str, str]:
+    detail_url = resolve_eidolon_detail_url(partner, eidolon_index, tw_eidolon_index)
     assets = app.parse_detail_assets(detail_url)
     return {
         "detail_url": detail_url,
@@ -792,6 +892,8 @@ def sync_seed_google_sheet(seed_path: Path, google_sheet_url: str, sheet_name: s
 
 def sync_db_assets(partners: dict[int, ClientPartner], wishes_by_partner: dict[int, list[ClientWish]]) -> None:
     matched = map_seed_eidolons(partners)
+    eidolon_index: dict[str, dict[str, str]] | None = None
+    tw_eidolon_index: dict[str, dict[str, str]] | None = None
     updated_eidolons = 0
     updated = 0
     direct_item_updates = 0
@@ -810,7 +912,11 @@ def sync_db_assets(partners: dict[int, ClientPartner], wishes_by_partner: dict[i
             assets: dict[int, dict[str, str]] = {}
             try:
                 if not seed_row["image_url"] or not seed_row["icon_url"] or not seed_row["detail_url"]:
-                    eidolon_assets = fetch_eidolon_assets(partner_id, partner.name)
+                    if eidolon_index is None:
+                        eidolon_index = app.parse_eidolon_list()
+                    if tw_eidolon_index is None:
+                        tw_eidolon_index = parse_tw_eidolon_list()
+                    eidolon_assets = fetch_eidolon_assets(partner, eidolon_index, tw_eidolon_index)
                     conn.execute(
                         """
                         UPDATE eidolons
@@ -827,7 +933,11 @@ def sync_db_assets(partners: dict[int, ClientPartner], wishes_by_partner: dict[i
                         ),
                     )
                     updated_eidolons += 1
-                assets = fetch_eidolon_wish_assets(partner_id, partner.name)
+                if eidolon_index is None:
+                    eidolon_index = app.parse_eidolon_list()
+                if tw_eidolon_index is None:
+                    tw_eidolon_index = parse_tw_eidolon_list()
+                assets = fetch_eidolon_wish_assets(partner, eidolon_index, tw_eidolon_index)
                 fetched += 1
             except Exception as exc:
                 missing_pages += 1

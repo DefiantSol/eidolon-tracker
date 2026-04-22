@@ -47,7 +47,7 @@ async function load() {
   render();
 }
 
-async function post(url, payload) {
+async function sendJson(url, payload) {
   const response = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -56,6 +56,16 @@ async function post(url, payload) {
   if (!response.ok) {
     throw new Error(await response.text());
   }
+  return response.json();
+}
+
+async function post(url, payload) {
+  state.data = await sendJson(url, payload);
+  render();
+}
+
+async function refreshState() {
+  const response = await fetch("/api/state");
   state.data = await response.json();
   render();
 }
@@ -653,7 +663,7 @@ function itemIcon(imageUrl, qualityCode) {
 }
 
 function eidolonImage(eidolon) {
-  const image = eidolon.image_url || eidolon.icon_url;
+  const image = eidolon.icon_url || eidolon.image_url;
   if (!image) {
     return `<div class="eidolon-art empty-art">${initials(eidolon.name)}</div>`;
   }
@@ -893,7 +903,20 @@ quickSetupApply.addEventListener("click", async () => {
     };
   });
   try {
-    await post("/api/quick-setup", { eidolons });
+    for (const eidolon of eidolons) {
+      await sendJson(`/api/eidolons/${eidolon.id}`, {
+        owned: eidolon.owned,
+        completed: false,
+        star_rating: eidolon.star_rating,
+      });
+      const items = state.data.items.filter((item) => item.eidolon_id === eidolon.id);
+      const targetTier = eidolon.completed ? Number.MAX_SAFE_INTEGER : Number(eidolon.wish_tier || 0);
+      for (const item of items) {
+        const shouldComplete = eidolon.owned && (eidolon.completed || Number(item.wish_tier) < targetTier);
+        await sendJson(`/api/items/${item.id}`, { completed: shouldComplete });
+      }
+    }
+    await refreshState();
     quickSetupDialog.close();
   } catch (error) {
     window.alert(`Quick setup failed: ${error.message}`);

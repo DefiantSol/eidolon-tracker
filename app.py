@@ -106,6 +106,10 @@ def prepare_runtime_storage() -> None:
             continue
         try:
             shutil.copy2(legacy_path, DB_PATH)
+            try:
+                legacy_path.unlink()
+            except OSError:
+                pass
             return
         except OSError:
             continue
@@ -1942,10 +1946,16 @@ def item_tiers_for_eidolon(conn: sqlite3.Connection, eidolon_id: int) -> list[tu
         (eidolon_id,),
     ).fetchall()
     tier = 0
+    previous_group = ""
     item_tiers = []
     for row in rows:
-        if (row["wish_group"] or "").strip():
-            tier += 1
+        raw_group = (row["wish_group"] or "").strip()
+        if raw_group:
+            if raw_group != previous_group:
+                tier += 1
+            elif tier == 0:
+                tier = 1
+            previous_group = raw_group
         elif tier == 0:
             tier = 1
         item_tiers.append((row["id"], tier))
@@ -1990,6 +2000,12 @@ def apply_quick_setup(entries: list[dict]) -> None:
             item_tiers = item_tiers_for_eidolon(conn, eidolon_id)
             max_tier = max((tier for _, tier in item_tiers), default=0)
             completed = 1 if owned and mark_completed and max_tier else 0
+            if eidolon_id == 3:
+                safe_log(
+                    "quick_setup_debug "
+                    f"id={eidolon_id} owned={owned} wish_tier={wish_tier} completed={completed} "
+                    f"item_tiers={item_tiers}"
+                )
 
             conn.execute(
                 """
@@ -2135,6 +2151,10 @@ class Handler(BaseHTTPRequestHandler):
         content_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
         self.send_response(200)
         self.send_header("Content-Type", content_type)
+        if path.suffix.lower() in {".html", ".js", ".css"}:
+            self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+            self.send_header("Pragma", "no-cache")
+            self.send_header("Expires", "0")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
