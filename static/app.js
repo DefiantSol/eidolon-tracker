@@ -912,7 +912,10 @@ quickSetupApply.addEventListener("click", async () => {
       const items = state.data.items.filter((item) => item.eidolon_id === eidolon.id);
       const targetTier = eidolon.completed ? Number.MAX_SAFE_INTEGER : Number(eidolon.wish_tier || 0);
       for (const item of items) {
-        const shouldComplete = eidolon.owned && (eidolon.completed || Number(item.wish_tier) < targetTier);
+        const itemTier = Number(item.wish_tier);
+        const shouldComplete =
+          eidolon.owned &&
+          (eidolon.completed || itemTier < targetTier || (itemTier === targetTier && Boolean(item.completed)));
         await sendJson(`/api/items/${item.id}`, { completed: shouldComplete });
       }
     }
