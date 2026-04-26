@@ -36,10 +36,14 @@ LOCAL_APPDATA = Path(os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
 USER_DATA_DIR = LOCAL_APPDATA / "EidolonTracker"
 DB_PATH = USER_DATA_DIR / "tracker.db"
 LOG_PATH = USER_DATA_DIR / "eidolon-tracker.log"
+UPDATES_DIR = USER_DATA_DIR / "updates"
 SHEET_NAME = "Eidolon"
 SEED_DATA_VERSION = "collections-stars-20260420"
 AKDB_BASE = "https://www.aurakingdom-db.com"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) EidolonTracker/1.0"
+APP_VERSION = "v1.0.9"
+GITHUB_REPO = "DefiantSol/eidolon-tracker"
+GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_REPO}"
 STARTER_EIDOLON_NAMES = ("Serif (Adam)", "Merrilee (Eve)", "Grimm (Zhulong)", "Alessa", "Ahri", "Sendama")
 STARTER_EIDOLONS = set(STARTER_EIDOLON_NAMES)
 
@@ -176,6 +180,14 @@ def init_db() -> None:
                 item_id INTEGER PRIMARY KEY REFERENCES wish_items(id) ON DELETE CASCADE,
                 completed INTEGER NOT NULL DEFAULT 0
             );
+
+            CREATE TABLE IF NOT EXISTS item_inventory (
+                profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                item_key TEXT NOT NULL,
+                item_name TEXT NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (profile_id, item_key)
+            );
             """
         )
         ensure_column(conn, "eidolons", "image_url", "TEXT NOT NULL DEFAULT ''")
@@ -301,6 +313,7 @@ def seed_database(force: bool = False) -> dict[str, int]:
 
 
 def reset_profile_data(conn: sqlite3.Connection, profile_id: int) -> None:
+    conn.execute("DELETE FROM item_inventory WHERE profile_id = ?", (profile_id,))
     conn.execute(
         """
         DELETE FROM item_progress
@@ -712,11 +725,139 @@ def fetch_url(url: str) -> str:
         return response.read().decode("utf-8", "ignore")
 
 
+def fetch_json(url: str) -> dict:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": USER_AGENT,
+            "Accept": "application/vnd.github+json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
 def fetch_bytes(url: str) -> tuple[bytes, str]:
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(request, timeout=30) as response:
         content_type = response.headers.get("Content-Type", "")
         return response.read(), content_type
+
+
+def parse_version_tuple(value: str) -> tuple[int, ...]:
+    parts = [int(part) for part in re.findall(r"\d+", str(value or ""))]
+    return tuple(parts) if parts else (0,)
+
+
+def packaged_app() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def current_app_info() -> dict:
+    return {
+        "version": APP_VERSION,
+        "packaged": 1 if packaged_app() else 0,
+        "update_supported": 1 if packaged_app() else 0,
+    }
+
+
+def latest_release_info() -> dict:
+    release = fetch_json(f"{GITHUB_API_BASE}/releases/latest")
+    tag_name = str(release.get("tag_name") or "").strip()
+    asset = next(
+        (
+            asset
+            for asset in release.get("assets", [])
+            if re.match(r"^EidolonTracker-v[\d.]+-windows\.zip$", str(asset.get("name") or ""))
+        ),
+        None,
+    )
+    return {
+        "version": tag_name,
+        "name": str(release.get("name") or tag_name),
+        "published_at": str(release.get("published_at") or ""),
+        "download_url": str(asset.get("browser_download_url") or "") if asset else "",
+        "asset_name": str(asset.get("name") or "") if asset else "",
+        "available": 1 if asset and parse_version_tuple(tag_name) > parse_version_tuple(APP_VERSION) else 0,
+    }
+
+
+def write_updater_script() -> Path:
+    UPDATES_DIR.mkdir(parents=True, exist_ok=True)
+    script_path = UPDATES_DIR / "apply_update.ps1"
+    script_path.write_text(
+        """param(
+  [Parameter(Mandatory=$true)][string]$ZipPath,
+  [Parameter(Mandatory=$true)][string]$InstallDir,
+  [Parameter(Mandatory=$true)][string]$ExePath,
+  [Parameter(Mandatory=$true)][int]$WaitPid
+)
+$ErrorActionPreference = 'Stop'
+$deadline = (Get-Date).AddMinutes(2)
+while ((Get-Date) -lt $deadline) {
+  $proc = Get-Process -Id $WaitPid -ErrorAction SilentlyContinue
+  if (-not $proc) { break }
+  Start-Sleep -Milliseconds 500
+}
+$stage = Join-Path $env:TEMP ('eidolon-tracker-update-' + [guid]::NewGuid().ToString())
+New-Item -ItemType Directory -Path $stage -Force | Out-Null
+Expand-Archive -LiteralPath $ZipPath -DestinationPath $stage -Force
+$entries = Get-ChildItem -LiteralPath $stage
+$sourceDir = if ($entries.Count -eq 1 -and $entries[0].PSIsContainer) { $entries[0].FullName } else { $stage }
+robocopy $sourceDir $InstallDir /E /R:2 /W:1 /NFL /NDL /NP | Out-Null
+Start-Sleep -Seconds 1
+Start-Process -FilePath $ExePath -WorkingDirectory $InstallDir
+""",
+        encoding="utf-8",
+    )
+    return script_path
+
+
+def install_update() -> dict:
+    if not packaged_app():
+        raise ValueError("Built-in update install is only available in the packaged Windows app.")
+    release = latest_release_info()
+    if not release.get("download_url"):
+        raise ValueError("No downloadable Windows release asset was found.")
+    if not release.get("available"):
+        return {
+            "ok": True,
+            "updated": False,
+            "message": f"Already on the latest version ({APP_VERSION}).",
+            "version": APP_VERSION,
+        }
+
+    UPDATES_DIR.mkdir(parents=True, exist_ok=True)
+    zip_path = UPDATES_DIR / release["asset_name"]
+    request = urllib.request.Request(release["download_url"], headers={"User-Agent": USER_AGENT})
+    with urllib.request.urlopen(request, timeout=120) as response:
+        zip_path.write_bytes(response.read())
+
+    script_path = write_updater_script()
+    subprocess_args = [
+        "powershell",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(script_path),
+        "-ZipPath",
+        str(zip_path),
+        "-InstallDir",
+        str(APP_DIR),
+        "-ExePath",
+        str(Path(sys.executable).resolve()),
+        "-WaitPid",
+        str(os.getpid()),
+    ]
+    import subprocess
+
+    subprocess.Popen(subprocess_args, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return {
+        "ok": True,
+        "updated": True,
+        "message": f"Installing {release['version']} and restarting.",
+        "version": release["version"],
+    }
 
 
 def normalize_name(value: str) -> str:
@@ -1493,6 +1634,39 @@ def row_to_dict(row: sqlite3.Row) -> dict:
     return {key: row[key] for key in row.keys()}
 
 
+def inventory_key(value: object) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def consume_inventory_for_item(conn: sqlite3.Connection, profile_id: int, item_name: str, quantity: object) -> None:
+    item_key = inventory_key(item_name)
+    if not item_key:
+        return
+    try:
+        amount = int(float(quantity or 0) or 0)
+    except (TypeError, ValueError):
+        amount = 0
+    if amount <= 0:
+        amount = 1
+    row = conn.execute(
+        "SELECT quantity FROM item_inventory WHERE profile_id = ? AND item_key = ?",
+        (profile_id, item_key),
+    ).fetchone()
+    if row is None:
+        return
+    remaining = max(0, int(row["quantity"] or 0) - amount)
+    if remaining == 0:
+        conn.execute(
+            "DELETE FROM item_inventory WHERE profile_id = ? AND item_key = ?",
+            (profile_id, item_key),
+        )
+    else:
+        conn.execute(
+            "UPDATE item_inventory SET quantity = ? WHERE profile_id = ? AND item_key = ?",
+            (remaining, profile_id, item_key),
+        )
+
+
 def seed_collections() -> list[dict]:
     if not SEED_PATH.exists():
         return []
@@ -1748,6 +1922,18 @@ def get_payload() -> dict:
             """,
             (profile_id,),
         ).fetchall()
+        inventory = [
+            row_to_dict(row)
+            for row in conn.execute(
+                """
+                SELECT item_key, item_name, quantity
+                FROM item_inventory
+                WHERE profile_id = ?
+                ORDER BY item_name
+                """,
+                (profile_id,),
+            ).fetchall()
+        ]
         eidolons = [row_to_dict(row) for row in eidolon_rows]
         for eidolon in eidolons:
             eidolon["is_starter"] = 1 if eidolon["name"] in STARTER_EIDOLONS else 0
@@ -1756,9 +1942,11 @@ def get_payload() -> dict:
         collections = build_collections(eidolons)
         return {
             **profiles_payload(conn),
+            "app": current_app_info(),
             "summary": build_summary(eidolons, item_dicts, collections),
             "eidolons": eidolons,
             "items": item_dicts,
+            "inventory": inventory,
             "collections": collections,
         }
 
@@ -1831,15 +2019,17 @@ def set_item(item_id: int, completed: bool) -> None:
         profile_id = get_current_profile_id(conn)
         item_row = conn.execute(
             """
-            SELECT w.id, w.eidolon_id
+            SELECT w.id, w.eidolon_id, w.item, w.quantity_value, COALESCE(p.completed, 0) AS completed
             FROM wish_items w
             JOIN eidolons e ON e.id = w.eidolon_id
+            LEFT JOIN item_progress p ON p.item_id = w.id
             WHERE w.id = ? AND e.profile_id = ?
             """,
             (item_id, profile_id),
         ).fetchone()
         if item_row is None:
             raise ValueError("Item not found.")
+        was_completed = bool(item_row["completed"])
         conn.execute(
             """
             INSERT INTO item_progress (item_id, completed)
@@ -1848,6 +2038,8 @@ def set_item(item_id: int, completed: bool) -> None:
             """,
             (item_id, 1 if completed else 0),
         )
+        if completed and not was_completed:
+            consume_inventory_for_item(conn, profile_id, item_row["item"], item_row["quantity_value"])
         eidolon_id = item_row["eidolon_id"]
         counts = conn.execute(
             """
@@ -1864,6 +2056,182 @@ def set_item(item_id: int, completed: bool) -> None:
             conn.execute("UPDATE eidolons SET owned = 1, completed = 1 WHERE id = ? AND profile_id = ?", (eidolon_id, profile_id))
         elif not completed:
             conn.execute("UPDATE eidolons SET completed = 0 WHERE id = ? AND profile_id = ?", (eidolon_id, profile_id))
+
+
+def set_inventory_quantity(item_name: str, quantity: int, item_key: str | None = None) -> None:
+    normalized_name = str(item_name or "").strip()
+    normalized_key = inventory_key(item_key if item_key is not None else item_name)
+    if not normalized_name or not normalized_key:
+        raise ValueError("Inventory item is required.")
+    quantity = max(0, int(quantity or 0))
+    with connect() as conn:
+        profile_id = get_current_profile_id(conn)
+        if quantity == 0:
+            conn.execute(
+                "DELETE FROM item_inventory WHERE profile_id = ? AND item_key = ?",
+                (profile_id, normalized_key),
+            )
+            return
+        conn.execute(
+            """
+            INSERT INTO item_inventory (profile_id, item_key, item_name, quantity)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(profile_id, item_key) DO UPDATE SET
+                item_name = excluded.item_name,
+                quantity = excluded.quantity
+            """,
+            (profile_id, normalized_key, normalized_name, quantity),
+        )
+
+
+def set_items_bulk(entries: list[dict]) -> None:
+    if not isinstance(entries, list):
+        raise ValueError("Items bulk update requires an items list.")
+
+    with connect() as conn:
+        profile_id = get_current_profile_id(conn)
+        rows = conn.execute(
+            """
+            SELECT w.id, w.eidolon_id, w.item, w.quantity_value, COALESCE(p.completed, 0) AS completed
+            FROM wish_items w
+            JOIN eidolons e ON e.id = w.eidolon_id
+            LEFT JOIN item_progress p ON p.item_id = w.id
+            WHERE e.profile_id = ?
+            """,
+            (profile_id,),
+        ).fetchall()
+        item_rows = {row["id"]: row for row in rows}
+        touched_eidolons: set[int] = set()
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            item_id = int(entry.get("id", 0) or 0)
+            if item_id not in item_rows:
+                continue
+            completed = 1 if entry.get("completed") else 0
+            item_row = item_rows[item_id]
+            was_completed = bool(item_row["completed"])
+            conn.execute(
+                """
+                INSERT INTO item_progress (item_id, completed)
+                VALUES (?, ?)
+                ON CONFLICT(item_id) DO UPDATE SET completed = excluded.completed
+                """,
+                (item_id, completed),
+            )
+            if completed and not was_completed:
+                consume_inventory_for_item(conn, profile_id, item_row["item"], item_row["quantity_value"])
+            touched_eidolons.add(item_row["eidolon_id"])
+
+        for eidolon_id in touched_eidolons:
+            counts = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN COALESCE(p.completed, 0) = 1 THEN 1 ELSE 0 END) AS done
+                FROM wish_items w
+                LEFT JOIN item_progress p ON p.item_id = w.id
+                WHERE w.eidolon_id = ?
+                """,
+                (eidolon_id,),
+            ).fetchone()
+            total = int(counts["total"] or 0)
+            done = int(counts["done"] or 0)
+            if total and done == total:
+                conn.execute(
+                    "UPDATE eidolons SET owned = 1, completed = 1 WHERE id = ? AND profile_id = ?",
+                    (eidolon_id, profile_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE eidolons SET completed = 0 WHERE id = ? AND profile_id = ?",
+                    (eidolon_id, profile_id),
+                )
+
+
+def set_eidolons_bulk(entries: list[dict]) -> None:
+    if not isinstance(entries, list):
+        raise ValueError("Eidolons bulk update requires an eidolons list.")
+
+    with connect() as conn:
+        profile_id = get_current_profile_id(conn)
+        valid_ids = {
+            row["id"]
+            for row in conn.execute(
+                "SELECT id FROM eidolons WHERE profile_id = ?",
+                (profile_id,),
+            )
+        }
+
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            eidolon_id = int(entry.get("id", 0) or 0)
+            if eidolon_id not in valid_ids:
+                continue
+
+            assignments = []
+            values = []
+            if "owned" in entry:
+                assignments.append("owned = ?")
+                values.append(1 if entry.get("owned") else 0)
+            if "completed" in entry:
+                assignments.append("completed = ?")
+                values.append(1 if entry.get("completed") else 0)
+            if "star_rating" in entry:
+                try:
+                    star_rating = max(0, min(int(entry.get("star_rating", 0) or 0), 4))
+                except (TypeError, ValueError):
+                    star_rating = 0
+                assignments.append("star_rating = ?")
+                values.append(star_rating)
+                if star_rating > 0 and "owned" not in entry:
+                    assignments.append("owned = 1")
+            if "character_note" in entry:
+                assignments.append("character_note = ?")
+                values.append(str(entry.get("character_note", ""))[:500])
+
+            if not assignments:
+                continue
+
+            values.extend([eidolon_id, profile_id])
+            conn.execute(
+                f"UPDATE eidolons SET {', '.join(assignments)} WHERE id = ? AND profile_id = ?",
+                values,
+            )
+
+            if "owned" in entry and not entry.get("owned"):
+                conn.execute(
+                    "UPDATE eidolons SET completed = 0, star_rating = 0 WHERE id = ? AND profile_id = ?",
+                    (eidolon_id, profile_id),
+                )
+                conn.execute(
+                    """
+                    DELETE FROM item_progress
+                    WHERE item_id IN (
+                        SELECT id
+                        FROM wish_items
+                        WHERE eidolon_id = ?
+                    )
+                    """,
+                    (eidolon_id,),
+                )
+            elif entry.get("completed"):
+                conn.execute(
+                    "UPDATE eidolons SET owned = 1 WHERE id = ? AND profile_id = ?",
+                    (eidolon_id, profile_id),
+                )
+                conn.execute(
+                    """
+                    INSERT INTO item_progress (item_id, completed)
+                    SELECT id, 1
+                    FROM wish_items
+                    WHERE eidolon_id = ?
+                    ON CONFLICT(item_id) DO UPDATE SET completed = 1
+                    """,
+                    (eidolon_id,),
+                )
 
 
 def apply_bulk_action(action: str) -> None:
@@ -1994,18 +2362,13 @@ def apply_quick_setup(entries: list[dict]) -> None:
                 wish_tier = 0
                 mark_completed = 0
                 star_rating = 0
-            elif star_rating > 0:
+            else:
+                star_rating = max(1, star_rating)
                 owned = 1
 
             item_tiers = item_tiers_for_eidolon(conn, eidolon_id)
             max_tier = max((tier for _, tier in item_tiers), default=0)
             completed = 1 if owned and mark_completed and max_tier else 0
-            if eidolon_id == 3:
-                safe_log(
-                    "quick_setup_debug "
-                    f"id={eidolon_id} owned={owned} wish_tier={wish_tier} completed={completed} "
-                    f"item_tiers={item_tiers}"
-                )
 
             conn.execute(
                 """
@@ -2015,30 +2378,39 @@ def apply_quick_setup(entries: list[dict]) -> None:
                 """,
                 (owned, completed, star_rating, eidolon_id, profile_id),
             )
-            conn.execute(
-                """
-                DELETE FROM item_progress
-                WHERE item_id IN (
-                    SELECT id
-                    FROM wish_items
-                    WHERE eidolon_id = ?
-                )
-                """,
-                (eidolon_id,),
-            )
-            completed_ids = [
-                item_id
-                for item_id, tier in item_tiers
-                if owned and ((completed and tier <= max_tier) or (not completed and tier < wish_tier))
-            ]
-            if completed_ids:
+            existing_progress = {
+                row["item_id"]: int(row["completed"] or 0)
+                for row in conn.execute(
+                    """
+                    SELECT p.item_id, p.completed
+                    FROM item_progress p
+                    JOIN wish_items w ON w.id = p.item_id
+                    WHERE w.eidolon_id = ?
+                    """,
+                    (eidolon_id,),
+                ).fetchall()
+            }
+            updates = []
+            for item_id, tier in item_tiers:
+                if not owned:
+                    target_completed = 0
+                elif completed:
+                    target_completed = 1
+                elif tier < wish_tier:
+                    target_completed = 1
+                elif tier == wish_tier:
+                    target_completed = existing_progress.get(item_id, 0)
+                else:
+                    target_completed = 0
+                updates.append((item_id, target_completed))
+            if updates:
                 conn.executemany(
                     """
                     INSERT INTO item_progress (item_id, completed)
-                    VALUES (?, 1)
-                    ON CONFLICT(item_id) DO UPDATE SET completed = 1
+                    VALUES (?, ?)
+                    ON CONFLICT(item_id) DO UPDATE SET completed = excluded.completed
                     """,
-                    [(item_id,) for item_id in completed_ids],
+                    updates,
                 )
 
 
@@ -2106,10 +2478,35 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, {"ok": True})
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
                 return
+            if len(parts) == 3 and parts == ["api", "update", "check"]:
+                self.send_json(200, {**current_app_info(), "release": latest_release_info()})
+                return
             if len(parts) == 3 and parts == ["api", "backup", "restore"]:
                 self.send_json(200, restore_tracker_database(self.read_body()))
                 return
             payload = self.read_json()
+            if len(parts) == 3 and parts == ["api", "update", "install"]:
+                result = install_update()
+                self.send_json(200, result)
+                if result.get("updated"):
+                    threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
+            if len(parts) == 3 and parts == ["api", "eidolons", "bulk"]:
+                set_eidolons_bulk(payload.get("eidolons", []))
+                self.send_json(200, get_payload())
+                return
+            if len(parts) == 3 and parts == ["api", "items", "bulk"]:
+                set_items_bulk(payload.get("items", []))
+                self.send_json(200, get_payload())
+                return
+            if len(parts) == 3 and parts == ["api", "inventory", "set"]:
+                set_inventory_quantity(
+                    str(payload.get("item_name", "")),
+                    int(payload.get("quantity", 0) or 0),
+                    str(payload.get("item_key", "")),
+                )
+                self.send_json(200, get_payload())
+                return
             if len(parts) == 3 and parts[:2] == ["api", "eidolons"]:
                 set_eidolon(int(parts[2]), payload)
                 self.send_json(200, get_payload())

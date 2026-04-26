@@ -4,35 +4,42 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Eidolon Wish Tracker</title>
-    <link rel="stylesheet" href="/styles.css?v=20260421b">
+    <link rel="stylesheet" href="/styles.css?v=20260424r">
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-title">
-        <label class="profile-picker">
-          <span>Profile</span>
-          <select id="profileSelect"></select>
-        </label>
-        <div class="profile-actions">
-          <button class="mini-action" id="profileNew" type="button">New</button>
-          <button class="mini-action" id="profileRename" type="button">Rename</button>
-        </div>
         <p class="eyebrow">Aura Kingdom</p>
         <h1>Eidolon Wish Tracker</h1>
       </div>
       <div class="topbar-side">
-        <button class="theme-toggle" id="themeToggle" type="button">Dark Mode</button>
-        <div class="stats" id="stats"></div>
+        <div class="profile-row">
+          <button class="theme-toggle" id="themeToggle" type="button" aria-label="Toggle theme" title="Toggle theme">🌙</button>
+          <div class="profile-stack">
+            <label class="profile-picker">
+              <span>Profile</span>
+              <select id="profileSelect"></select>
+            </label>
+            <div class="profile-actions">
+              <button class="mini-action" id="profileNew" type="button">New</button>
+              <button class="mini-action" id="profileRename" type="button">Rename</button>
+            </div>
+          </div>
+        </div>
       </div>
+      <div class="stats" id="stats"></div>
     </header>
 
     <main>
       <section class="toolbar">
-        <div class="tabs" role="tablist" aria-label="Tracker views">
-          <button class="tab active" data-view="shopping">Wishes</button>
-          <button class="tab" data-view="items">Items</button>
-          <button class="tab" data-view="eidolons">Eidolons</button>
-          <button class="tab" data-view="collections">Collection</button>
+        <div class="tabs-shell">
+          <button class="tabs-toggle" id="tabsToggle" type="button" aria-label="Toggle views" aria-expanded="false">☰</button>
+          <div class="tabs" id="tabsMenu" role="tablist" aria-label="Tracker views">
+            <button class="tab active" data-view="shopping">Wishes</button>
+            <button class="tab" data-view="items">Items</button>
+            <button class="tab" data-view="eidolons">Eidolons</button>
+            <button class="tab" data-view="collections">Collection</button>
+          </div>
         </div>
         <div class="toolbar-tools">
           <label class="progress-filter">
@@ -57,6 +64,15 @@
 
       <section id="content" class="content" aria-live="polite"></section>
     </main>
+
+    <footer class="site-footer">
+      <p>Built By: <a href="https://github.com/DefiantSol" target="_blank" rel="noreferrer">DefiantSol</a></p>
+      <p>
+        Shoutout to all the Contributors of Projects:
+        <a href="https://docs.google.com/spreadsheets/d/1EOnM6VWPcqOXkDrRsw1sX4d2bOJ4PBf5avrmAtOPfXY" target="_blank" rel="noreferrer">AKTO References</a>,
+        <a href="https://www.aurakingdom-db.com/" target="_blank" rel="noreferrer">AuraKingdom DB</a>
+      </p>
+    </footer>
 
     <dialog class="settings-dialog" id="settingsDialog">
       <form method="dialog" class="settings-panel">
@@ -114,6 +130,17 @@
 
         <section class="setting-row">
           <div>
+            <h3>Updates</h3>
+            <p id="updateStatus">Version</p>
+          </div>
+          <div class="backup-actions">
+            <button class="action" id="updateCheck" type="button">Check for Updates</button>
+            <button class="action primary" id="updateInstall" type="button">Download and Restart</button>
+          </div>
+        </section>
+
+        <section class="setting-row">
+          <div>
             <h3>Application</h3>
             <p>Stop the local tracker server and close this app session cleanly.</p>
           </div>
@@ -160,6 +187,6 @@
       </form>
     </dialog>
 
-    <script src="/app.js?v=20260421b"></script>
+    <script src="/app.js?v=20260424r"></script>
   </body>
 </html>

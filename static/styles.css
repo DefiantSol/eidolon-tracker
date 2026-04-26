@@ -11,6 +11,10 @@
   --soft: #e2f0ed;
   --gold: #c4943b;
   --shadow: 0 8px 24px rgba(32, 35, 34, 0.08);
+  --control-height: 38px;
+  --control-height-compact: 36px;
+  --control-height-tight: 32px;
+  --icon-control-size: 38px;
 }
 
 [data-theme="dark"] {
@@ -53,9 +57,9 @@ select {
 }
 
 .topbar {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(260px, auto) minmax(0, 1fr);
+  align-items: start;
   gap: 24px;
   padding: 28px clamp(16px, 4vw, 48px);
   background:
@@ -66,20 +70,51 @@ select {
 
 .topbar-side {
   display: grid;
-  gap: 12px;
   justify-items: end;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .topbar-title {
   display: grid;
   gap: 8px;
   justify-items: start;
+  align-content: start;
+}
+
+.profile-row {
+  display: flex;
+  align-items: end;
+  justify-content: end;
+  gap: 10px;
+  flex-wrap: wrap;
+  max-width: 100%;
+}
+
+.profile-stack {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  flex-wrap: nowrap;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.profile-stack .profile-picker {
+  flex: 0 1 260px;
+  min-width: 0;
+}
+
+.profile-stack .profile-actions {
+  flex: 0 0 auto;
+  justify-content: end;
 }
 
 .profile-picker {
   display: grid;
   gap: 4px;
-  min-width: min(260px, 100%);
+  min-width: 0;
+  width: min(260px, 100%);
 }
 
 .profile-picker span {
@@ -90,7 +125,8 @@ select {
 }
 
 .profile-picker select {
-  min-height: 38px;
+  width: 100%;
+  min-height: var(--control-height);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -105,7 +141,7 @@ select {
 }
 
 .eyebrow {
-  margin: 0 0 4px;
+  margin: 0;
   color: var(--accent-dark);
   font-size: 0.82rem;
   font-weight: 700;
@@ -122,8 +158,28 @@ h1 {
 .stats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-column: 1 / -1;
   gap: 12px;
-  min-width: min(1080px, 100%);
+  min-width: 0;
+  width: 100%;
+}
+
+@media (max-width: 1280px) {
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .profile-stack {
+    flex-wrap: wrap;
+  }
+
+  .profile-stack .profile-picker {
+    flex: 1 1 260px;
+  }
+
+  .profile-stack .profile-actions {
+    width: 100%;
+  }
 }
 
 .stat-group {
@@ -170,6 +226,22 @@ main {
   padding: 18px clamp(16px, 4vw, 48px) 42px;
 }
 
+.site-footer {
+  width: min(1440px, 100%);
+  margin: 0 auto;
+  padding: 0 clamp(16px, 4vw, 48px) 28px;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.site-footer p {
+  margin: 0 0 6px;
+}
+
+.site-footer a {
+  color: var(--accent-dark);
+}
+
 .toolbar {
   display: flex;
   align-items: center;
@@ -178,10 +250,28 @@ main {
   margin: 0 0 12px;
 }
 
+.tabs-shell {
+  position: relative;
+}
+
 .tabs {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.tabs-toggle {
+  display: none;
+  min-width: var(--icon-control-size);
+  height: var(--icon-control-size);
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 1.05rem;
+  line-height: 1;
 }
 
 .toolbar-tools {
@@ -208,14 +298,26 @@ main {
   background: var(--panel);
   color: var(--ink);
   cursor: pointer;
-  min-height: 38px;
+  min-height: var(--control-height);
   padding: 8px 12px;
 }
 
 .mini-action {
-  min-height: 30px;
-  padding: 5px 9px;
+  min-height: var(--control-height);
+  padding: 8px 12px;
   font-size: 0.86rem;
+}
+
+.theme-toggle {
+  min-width: var(--icon-control-size);
+  width: var(--icon-control-size);
+  height: var(--icon-control-size);
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  font-size: 1.1rem;
+  line-height: 1;
+  flex: 0 0 var(--icon-control-size);
 }
 
 .tab.active,
@@ -371,7 +473,7 @@ dialog::backdrop {
 
 .quick-setup-search input {
   width: min(280px, 34vw);
-  min-height: 34px;
+  min-height: var(--control-height-compact);
   padding: 7px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -446,7 +548,7 @@ dialog::backdrop {
 .quick-setup-stars button,
 .quick-setup-tiers button {
   position: relative;
-  min-height: 34px;
+  min-height: var(--control-height-compact);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -516,7 +618,7 @@ dialog::backdrop {
 .search input,
 .progress-filter select {
   width: min(360px, 50vw);
-  min-height: 38px;
+  min-height: var(--control-height);
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -648,7 +750,7 @@ dialog::backdrop {
 
 .starter-note input {
   width: 100%;
-  min-height: 38px;
+  min-height: var(--control-height);
   padding: 8px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -770,7 +872,7 @@ dialog::backdrop {
 .consolidated-head,
 .consolidated-row {
   display: grid;
-  grid-template-columns: minmax(240px, 1.2fr) 150px minmax(280px, 2fr);
+  grid-template-columns: minmax(240px, 1.2fr) 140px 110px minmax(280px, 2fr);
   gap: 14px;
   align-items: center;
   padding: 12px 16px;
@@ -817,6 +919,17 @@ dialog::backdrop {
 .consolidated-qty {
   font-size: 1.05rem;
   font-weight: 800;
+}
+
+.consolidated-have input {
+  width: 88px;
+  min-height: var(--control-height);
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font-weight: 700;
 }
 
 .eidolon-chips {
@@ -930,15 +1043,57 @@ dialog::backdrop {
   background: color-mix(in srgb, var(--accent) 16%, var(--panel));
 }
 
-@media (max-width: 920px) {
+@media (max-width: 1280px) {
   .topbar,
   .toolbar {
     align-items: stretch;
     flex-direction: column;
   }
 
+  .topbar {
+    display: flex;
+  }
+
   .toolbar-tools {
     align-items: stretch;
+    justify-content: start;
+  }
+
+  .toolbar {
+    flex-direction: row;
+    align-items: start;
+    flex-wrap: wrap;
+  }
+
+  .tabs-shell {
+    flex: 0 0 auto;
+  }
+
+  .tabs-toggle {
+    display: inline-grid;
+    place-items: center;
+  }
+
+  .tabs {
+    position: absolute;
+    top: calc(100% + 8px);
+    left: 0;
+    z-index: 30;
+    display: none;
+    min-width: 180px;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--panel);
+    box-shadow: var(--shadow);
+  }
+
+  .tabs.open {
+    display: grid;
+  }
+
+  .tabs .tab {
+    width: 100%;
     justify-content: start;
   }
 
@@ -947,7 +1102,16 @@ dialog::backdrop {
   }
 
   .stats {
-    grid-template-columns: 1fr;
+    grid-column: auto;
+  }
+
+  .profile-row {
+    align-items: stretch;
+    justify-content: start;
+  }
+
+  .stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .search,
@@ -1035,13 +1199,132 @@ dialog::backdrop {
   }
 }
 
+@media (max-width: 720px) {
+  .topbar {
+    padding: 18px 14px;
+    gap: 16px;
+  }
+
+  main {
+    padding: 14px 14px 28px;
+  }
+
+  .toolbar-tools {
+    display: grid;
+    grid-template-columns: minmax(120px, auto) minmax(160px, 1fr) auto;
+    width: 100%;
+    align-items: end;
+  }
+
+  .settings-toggle {
+    justify-content: center;
+  }
+
+  .quick-setup-dialog,
+  .settings-dialog,
+  .confirm-dialog {
+    width: min(100%, calc(100% - 12px));
+  }
+
+  .quick-setup-list {
+    max-height: min(60vh, 520px);
+  }
+
+  .item {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .item .group,
+  .item .qty {
+    font-size: 0.88rem;
+  }
+
+  .item .actions {
+    justify-content: start;
+  }
+
+  .consolidated-row {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .consolidated-qty {
+    font-size: 0.96rem;
+  }
+
+  .consolidated-have input {
+    width: 100%;
+    max-width: 120px;
+  }
+
+  .collection-row {
+    grid-template-columns: 1fr;
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .collection-member,
+  .collection-row-tier {
+    min-height: 38px;
+    padding: 7px 8px;
+  }
+
+  .collection-row-tier {
+    grid-template-columns: 32px minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 560px) {
+  :root {
+    --control-height: 36px;
+    --control-height-compact: 34px;
+    --control-height-tight: 32px;
+    --icon-control-size: 36px;
+  }
+
+  h1 {
+    font-size: 1.45rem;
+  }
+
+  .profile-picker {
+    min-width: 0;
+  }
+
+  .profile-actions {
+    width: 100%;
+  }
+
+  .profile-actions .mini-action {
+    flex: 1 1 0;
+  }
+
+  .profile-row {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr);
+    align-items: end;
+  }
+
+  .profile-stack {
+    display: grid;
+    gap: 8px;
+    align-items: stretch;
+  }
+
+  .profile-stack .profile-actions {
+    grid-column: auto;
+  }
+
   .stats {
     grid-template-columns: 1fr;
   }
 
   .stat-row {
     grid-template-columns: 1fr;
+  }
+
+  .stat {
+    padding: 8px 10px;
   }
 
   .eidolon-header {
@@ -1059,5 +1342,92 @@ dialog::backdrop {
 
   .actions {
     justify-content: start;
+  }
+
+  .eidolon-art {
+    width: 64px;
+    height: 64px;
+    flex-basis: 64px;
+  }
+
+  .quick-setup-intro,
+  .quick-setup-row {
+    gap: 10px;
+  }
+
+  .quick-setup-row {
+    padding: 10px 12px;
+  }
+
+  .quick-setup-stars,
+  .quick-setup-tiers {
+    gap: 4px;
+  }
+
+  .quick-setup-stars button,
+  .quick-setup-tiers button {
+    min-height: var(--control-height-tight);
+    padding: 6px 4px;
+    font-size: 0.82rem;
+  }
+
+  .search input,
+  .progress-filter select,
+  .starter-note input,
+  .quick-setup-search input,
+  .consolidated-have input {
+    min-height: var(--control-height);
+  }
+
+  .segmented {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 420px) {
+  .topbar {
+    padding: 14px 10px;
+  }
+
+  main {
+    padding: 12px 10px 22px;
+  }
+
+  .tabs {
+    gap: 6px;
+  }
+
+  .tab,
+  .action,
+  .theme-toggle,
+  .settings-toggle,
+  .icon-action,
+  .mini-action,
+  .segmented button {
+    min-height: var(--control-height);
+    padding: 7px 10px;
+  }
+
+  .quick-setup-tiers {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .quick-setup-stars {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .quick-setup-tooltip {
+    max-width: min(260px, calc(100vw - 28px));
+    font-size: 0.78rem;
+  }
+
+  .item-name {
+    gap: 8px;
+  }
+
+  .item-icon {
+    width: 30px;
+    height: 30px;
+    flex-basis: 30px;
   }
 }

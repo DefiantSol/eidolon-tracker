@@ -13,6 +13,8 @@ const profileNew = document.querySelector("#profileNew");
 const profileRename = document.querySelector("#profileRename");
 const search = document.querySelector("#search");
 const progressFilter = document.querySelector("#progressFilter");
+const tabsToggle = document.querySelector("#tabsToggle");
+const tabsMenu = document.querySelector("#tabsMenu");
 const themeToggle = document.querySelector("#themeToggle");
 const settingsToggle = document.querySelector("#settingsToggle");
 const settingsDialog = document.querySelector("#settingsDialog");
@@ -25,6 +27,9 @@ const quickSetupApply = document.querySelector("#quickSetupApply");
 const backupDownload = document.querySelector("#backupDownload");
 const backupRestore = document.querySelector("#backupRestore");
 const backupRestoreInput = document.querySelector("#backupRestoreInput");
+const updateStatus = document.querySelector("#updateStatus");
+const updateCheck = document.querySelector("#updateCheck");
+const updateInstall = document.querySelector("#updateInstall");
 const appShutdown = document.querySelector("#appShutdown");
 const confirmDialog = document.querySelector("#confirmDialog");
 const confirmMessage = document.querySelector("#confirmMessage");
@@ -38,7 +43,9 @@ quickSetupPanel.appendChild(quickSetupTooltipEl);
 function applyTheme(theme) {
   document.documentElement.dataset.theme = theme;
   localStorage.setItem("theme", theme);
-  themeToggle.textContent = theme === "dark" ? "Light Mode" : "Dark Mode";
+  themeToggle.textContent = theme === "dark" ? "☀" : "🌙";
+  themeToggle.setAttribute("aria-label", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
+  themeToggle.setAttribute("title", theme === "dark" ? "Switch to light mode" : "Switch to dark mode");
 }
 
 async function load() {
@@ -240,6 +247,11 @@ function renderSettingsState() {
       (action === "clear_wishes" && noneComplete);
     button.classList.toggle("active", active);
   });
+  const appInfo = state.data.app || {};
+  updateStatus.textContent = appInfo.packaged
+    ? `Version ${appInfo.version}`
+    : `Version ${appInfo.version} (self-update available in packaged app only)`;
+  updateInstall.disabled = !appInfo.update_supported;
 }
 
 function renderQuickSetup() {
@@ -341,6 +353,19 @@ function render() {
   if (state.view === "collections") renderCollections();
 }
 
+function closeTabsMenu() {
+  if (!tabsMenu || !tabsToggle) return;
+  tabsMenu.classList.remove("open");
+  tabsToggle.setAttribute("aria-expanded", "false");
+}
+
+function toggleTabsMenu() {
+  if (!tabsMenu || !tabsToggle) return;
+  const next = !tabsMenu.classList.contains("open");
+  tabsMenu.classList.toggle("open", next);
+  tabsToggle.setAttribute("aria-expanded", next ? "true" : "false");
+}
+
 function renderEidolons() {
   const blocks = state.data.eidolons
     .filter((eidolon) => {
@@ -377,7 +402,8 @@ function renderConsolidatedItems() {
       <section class="consolidated">
         <div class="consolidated-head">
           <div>Wish Item</div>
-          <div>Total Quantity</div>
+          <div>Need</div>
+          <div>Have</div>
           <div>Eidolons</div>
         </div>
         ${groups.map(consolidatedRow).join("")}
@@ -467,18 +493,22 @@ function collectionTierRow(level, text, active) {
 }
 
 function consolidatedItems() {
+  const inventoryMap = new Map((state.data.inventory || []).map((entry) => [entry.item_key, Number(entry.quantity || 0)]));
   const groups = new Map();
   state.data.items.forEach((item) => {
     if (state.progressFilter === "active" && !isActiveWishItem(item)) return;
     const key = normalize(item.item);
+    if (key === "eidolon energy crystal") return;
     if (!groups.has(key)) {
       groups.set(key, {
         item: item.item,
         image_url: item.image_url,
         detail_url: item.detail_url,
         item_quality_code: item.item_quality_code || "",
+        item_key: key,
         totalQty: 0,
         remainingQty: 0,
+        inventoryQty: inventoryMap.get(key) || 0,
         entries: [],
       });
     }
@@ -519,6 +549,17 @@ function consolidatedRow(group) {
         <strong>${group.detail_url ? externalLink(group.item, group.detail_url) : escapeHtml(group.item)}</strong>
       </div>
       <div class="consolidated-qty">${formatQty(group.remainingQty)} / ${formatQty(group.totalQty)}</div>
+      <div class="consolidated-have">
+        <input
+          type="number"
+          min="0"
+          step="1"
+          value="${Math.max(0, Number(group.inventoryQty || 0))}"
+          data-item-key="${escapeHtml(group.item_key)}"
+          data-item-name="${escapeHtml(group.item)}"
+          onchange="setInventoryQuantity(this.dataset.itemKey, this.dataset.itemName, this.value)"
+        >
+      </div>
       <div class="eidolon-chips">
         ${entries.map(entryChip).join("")}
       </div>
@@ -657,7 +698,7 @@ function quickSetupStarButton(label, value, currentStar, owned) {
 function itemIcon(imageUrl, qualityCode) {
   const qualityAttr = qualityCode ? ` data-quality="${escapeHtml(String(qualityCode))}"` : "";
   if (imageUrl) {
-    return `<img class="item-icon" src="${escapeHtml(imageUrl)}" alt=""${qualityAttr}>`;
+    return `<img class="item-icon" src="${escapeHtml(imageUrl)}" alt="" loading="lazy" decoding="async" fetchpriority="low"${qualityAttr}>`;
   }
   return `<span class="item-icon placeholder"${qualityAttr}></span>`;
 }
@@ -667,7 +708,7 @@ function eidolonImage(eidolon) {
   if (!image) {
     return `<div class="eidolon-art empty-art">${initials(eidolon.name)}</div>`;
   }
-  return `<img class="eidolon-art" src="${escapeHtml(image)}" alt="">`;
+  return `<img class="eidolon-art" src="${escapeHtml(image)}" alt="" loading="lazy" decoding="async" fetchpriority="low">`;
 }
 
 function initials(name) {
@@ -706,6 +747,8 @@ window.setCompleted = (id, completed) => post(`/api/eidolons/${id}`, { completed
 window.setStar = (id, star_rating) => post(`/api/eidolons/${id}`, { star_rating });
 window.setCharacterNote = (id, character_note) => post(`/api/eidolons/${id}`, { character_note });
 window.setItem = (id, completed) => post(`/api/items/${id}`, { completed });
+window.setInventoryQuantity = (item_key, item_name, quantity) =>
+  post("/api/inventory/set", { item_key, item_name, quantity: Number(quantity || 0) });
 
 async function createProfile() {
   const name = window.prompt("New profile name");
@@ -903,23 +946,8 @@ quickSetupApply.addEventListener("click", async () => {
     };
   });
   try {
-    for (const eidolon of eidolons) {
-      await sendJson(`/api/eidolons/${eidolon.id}`, {
-        owned: eidolon.owned,
-        completed: false,
-        star_rating: eidolon.star_rating,
-      });
-      const items = state.data.items.filter((item) => item.eidolon_id === eidolon.id);
-      const targetTier = eidolon.completed ? Number.MAX_SAFE_INTEGER : Number(eidolon.wish_tier || 0);
-      for (const item of items) {
-        const itemTier = Number(item.wish_tier);
-        const shouldComplete =
-          eidolon.owned &&
-          (eidolon.completed || itemTier < targetTier || (itemTier === targetTier && Boolean(item.completed)));
-        await sendJson(`/api/items/${item.id}`, { completed: shouldComplete });
-      }
-    }
-    await refreshState();
+    state.data = await sendJson("/api/quick-setup", { eidolons });
+    render();
     quickSetupDialog.close();
   } catch (error) {
     window.alert(`Quick setup failed: ${error.message}`);
@@ -939,11 +967,46 @@ document.querySelectorAll("[data-setting-action]").forEach((button) => {
   });
 });
 
+updateCheck.addEventListener("click", async () => {
+  try {
+    const result = await sendJson("/api/update/check", {});
+    const release = result.release || {};
+    if (release.available) {
+      updateStatus.textContent = `Version ${result.version} -> ${release.version} available`;
+      window.alert(`Update available: ${release.version}`);
+      updateInstall.disabled = false;
+      return;
+    }
+    updateStatus.textContent = `Version ${result.version} (up to date)`;
+    window.alert(`Already on the latest version (${result.version}).`);
+  } catch (error) {
+    window.alert(`Update check failed: ${error.message}`);
+  }
+});
+
+updateInstall.addEventListener("click", async () => {
+  const confirmed = await confirmAction("Download the latest release, replace this app on restart, and relaunch?");
+  if (!confirmed) return;
+  try {
+    const result = await sendJson("/api/update/install", {});
+    window.alert(result.message || "Update downloaded. The app will restart.");
+  } catch (error) {
+    window.alert(`Update install failed: ${error.message}`);
+  }
+});
+
+tabsToggle?.addEventListener("click", toggleTabsMenu);
+
 document.querySelectorAll(".tab[data-view]").forEach((button) => {
   button.addEventListener("click", () => {
     state.view = button.dataset.view;
+    closeTabsMenu();
     render();
   });
+});
+
+window.addEventListener("resize", () => {
+  if (window.innerWidth > 1280) closeTabsMenu();
 });
 
 content.addEventListener("click", (event) => {
