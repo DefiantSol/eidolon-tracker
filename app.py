@@ -41,7 +41,7 @@ SHEET_NAME = "Eidolon"
 SEED_DATA_VERSION = "collections-stars-20260420"
 AKDB_BASE = "https://www.aurakingdom-db.com"
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) EidolonTracker/1.0"
-APP_VERSION = "v1.1.1"
+APP_VERSION = "v1.1.2"
 GITHUB_REPO = "DefiantSol/eidolon-tracker"
 GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_REPO}"
 STARTER_EIDOLON_NAMES = ("Serif (Adam)", "Merrilee (Eve)", "Grimm (Zhulong)", "Alessa", "Ahri", "Sendama")
@@ -81,6 +81,44 @@ def tracker_server_running(host: str, port: int) -> bool:
             return isinstance(payload, dict) and "summary" in payload and "eidolons" in payload and "items" in payload
     except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
         return False
+
+
+def tracker_server_app_info(host: str, port: int) -> dict[str, str | int]:
+    url = f"http://{host}:{port}/api/state"
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=1.5) as response:
+            if response.status != 200:
+                return {}
+            payload = json.loads(response.read().decode("utf-8"))
+            app = payload.get("app", {}) if isinstance(payload, dict) else {}
+            if not isinstance(app, dict):
+                return {}
+            return {
+                "version": str(app.get("version") or ""),
+                "packaged": 1 if app.get("packaged") else 0,
+            }
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError, json.JSONDecodeError):
+        return {}
+
+
+def request_tracker_shutdown(host: str, port: int) -> bool:
+    url = f"http://{host}:{port}/api/shutdown"
+    request = urllib.request.Request(url, data=b"{}", headers={"User-Agent": USER_AGENT, "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(request, timeout=3) as response:
+            return response.status == 200
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+        return False
+
+
+def wait_for_tracker_stop(host: str, port: int, timeout_seconds: float = 8.0) -> bool:
+    deadline = datetime.now().timestamp() + timeout_seconds
+    while datetime.now().timestamp() < deadline:
+        if not tracker_server_running(host, port):
+            return True
+        threading.Event().wait(0.25)
+    return not tracker_server_running(host, port)
 
 
 def is_address_in_use_error(exc: OSError) -> bool:
@@ -2641,13 +2679,33 @@ def main() -> None:
         return
 
     url = f"http://{args.host}:{args.port}"
+    should_open_browser = (getattr(sys, "frozen", False) or args.browser) and not args.no_browser
     try:
         server = ThreadingHTTPServer((args.host, args.port), Handler)
     except OSError as exc:
         if is_address_in_use_error(exc):
             if tracker_server_running(args.host, args.port):
-                safe_print(f"Eidolon tracker is already running at {url}")
-                return
+                running_app = tracker_server_app_info(args.host, args.port)
+                running_version = str(running_app.get("version") or "")
+                running_is_packaged = bool(running_app.get("packaged"))
+                launch_version = parse_version_tuple(APP_VERSION)
+                active_version = parse_version_tuple(running_version)
+                if packaged_app() and running_is_packaged and active_version < launch_version:
+                    safe_print(
+                        f"Stopping older tracker {running_version or '(unknown version)'} so {APP_VERSION} can start."
+                    )
+                    if request_tracker_shutdown(args.host, args.port) and wait_for_tracker_stop(args.host, args.port):
+                        server = ThreadingHTTPServer((args.host, args.port), Handler)
+                    else:
+                        raise SystemExit(
+                            f"Could not stop the older tracker at {url}. Close it manually and try again."
+                        )
+                else:
+                    if should_open_browser:
+                        webbrowser.open(url)
+                    running_label = running_version or "existing version"
+                    safe_print(f"Eidolon tracker {running_label} is already running at {url}")
+                    return
             raise SystemExit(
                 f"Port {args.port} is already in use by another app. "
                 "Close the other app or start Eidolon Tracker with --port <number>."
@@ -2655,7 +2713,6 @@ def main() -> None:
         raise
 
     safe_print(f"Eidolon tracker running at {url}")
-    should_open_browser = args.browser and not args.no_browser
 
     if should_open_browser:
         webbrowser.open(url)
