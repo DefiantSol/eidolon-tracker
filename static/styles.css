@@ -1033,6 +1033,14 @@ dialog::backdrop {
   font-size: 0.92rem;
 }
 
+.collection-member-source {
+  margin-left: 0.35rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 .collection-row-tier {
   grid-template-columns: 32px minmax(0, 1fr);
   white-space: nowrap;

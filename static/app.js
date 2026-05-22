@@ -106,6 +106,9 @@ function matchesCollection(collection) {
     collection.three_star_text,
     collection.four_star_text,
     ...(collection.members || []).map((member) => member.name),
+    ...(collection.members || []).flatMap((member) =>
+      (member.key_voucher_labels || []).flatMap((label) => [label, `[${label}]`, `voucher ${label}`, `gaia ${label}`]),
+    ),
   ]
     .map(normalize)
     .some((value) => value.includes(needle));
@@ -475,9 +478,12 @@ function collectionMemberRow(member) {
   if (member.owned) classes.push("owned");
   if (Number(member.star_rating || 0) >= 4) classes.push("maxed");
   const name = member.detail_url ? externalLink(member.name, member.detail_url) : escapeHtml(member.name);
+  const voucherLabels = (member.key_voucher_labels || [])
+    .map((label) => `<span class="collection-member-source">[${escapeHtml(label)}]</span>`)
+    .join("");
   return `
     <div class="${classes.join(" ")}">
-      <div class="collection-member-name">${name}</div>
+      <div class="collection-member-name">${name}${voucherLabels}</div>
     </div>
   `;
 }

@@ -46,6 +46,74 @@ GITHUB_REPO = "DefiantSol/eidolon-tracker"
 GITHUB_API_BASE = f"https://api.github.com/repos/{GITHUB_REPO}"
 STARTER_EIDOLON_NAMES = ("Serif (Adam)", "Merrilee (Eve)", "Grimm (Zhulong)", "Alessa", "Ahri", "Sendama")
 STARTER_EIDOLONS = set(STARTER_EIDOLON_NAMES)
+KEY_OF_GAIA_VOUCHER_SOURCES = {
+    "I": (
+        "Alice", "Ayako", "Eternia", "Yumikaze", "Zephyrine", "Dante", "Harmonia", "Zashi",
+        "Muse", "Lumikki", "Tyr", "Pandora", "Kitami", "Undine", "Verdandi", "Justicia",
+        "Venus", "Izanami", "Hebe", "Eirene", "Michaela", "Demeter", "Hermes", "Cerberus",
+    ),
+    "II": ("Qingniao", "Festival Muramasa", "Elizabeth", "Seiryuu", "Aoandon", "Sif", "Ares"),
+    "III": (
+        "Michaela", "Muramasa", "Hades", "Succubus", "Idun", "Nidhogg", "Tsukuyomi",
+        "Sakuya-hime", "Iwanaga-hime", "Skuld",
+    ),
+    "IV": (
+        "Kingyo-hime", "Persephone", "Summer Michaela", "Otohime", "Bastet",
+        "Halloween Zephyrine", "Orochi", "Santa Muse", "Santa Amaterasu", "Festival Succubus",
+    ),
+    "V": (
+        "Thumbelina", "Genbu", "Raphael", "Inaba", "Salome", "Summer Persephone",
+        "Abe no Seimei", "Rachel", "Nekomata",
+    ),
+    "VI": (
+        "Queen of Hearts", "Santa Raphael", "Santa Idun", "Hestia", "Festival Elizabeth",
+        "Little Red Riding Hood", "Komainu", "Percival", "Siren",
+    ),
+    "VII": (
+        "Summer Iwanaga-hime", "Frigga", "Hodur", "Shuten-Douji", "Xiao Qiao",
+        "Santa Komainu", "Santa Kingyo-hime",
+    ),
+    "VIII": ("Eris", "Da Qiao", "Summer Shuten-Douji", "Gaia", "Jormungand", "Anubis", "Thor"),
+    "IX": (
+        "Christmas Andrea", "Christmas Sakuya-hime", "New Year Queen of Hearts", "Zhang Fei",
+        "Odin", "Dorothy", "Poseidon", "Liu Bei", "Summer Rachel",
+    ),
+    "X": (
+        "Aurora", "Prometheus", "Beelzebub", "Guan Yu", "Christmas Little Red Riding Hood",
+        "Yagami-hime", "New Year Anubis", "Ganlin", "Shamal",
+    ),
+}
+KEY_OF_GAIA_VOUCHER_ALIASES = {
+    "Amaterasu": ("Amaterasu-Omikami",),
+    "Andrea": ("Andreas",),
+    "Ayako": ("Fenrir",),
+    "Dante": ("Lucifer",),
+    "Eternia": ("Chronos",),
+    "Gaia": ("Gaea",),
+    "Harmonia": ("Freya",),
+    "Hebe": ("Hera",),
+    "Hodur": ("Hodr", "Hoder",),
+    "Idun": ("Idunn",),
+    "Iwanaga-hime": ("Iwanagahime",),
+    "Kingyo-hime": ("Kingyohime",),
+    "Lumikki": ("Snow White",),
+    "Michaela": ("Michael",),
+    "Muramasa": ("Muramasa (Kotonoha)",),
+    "Orochi": ("Yamata no Orochi",),
+    "Sakuya-hime": ("Sakuyahime",),
+    "Santa Amaterasu": ("Christmas Amaterasu", "Christmas Amaterasu-Omikami"),
+    "Santa Idun": ("Christmas Idun", "Christmas Idunn"),
+    "Santa Kingyo-hime": ("Christmas Kingyo-hime", "Christmas Kingyohime"),
+    "Santa Komainu": ("Christmas Komainu",),
+    "Santa Muse": ("Christmas Muse",),
+    "Santa Raphael": ("Christmas Raphael",),
+    "Seiryuu": ("Seiryu",),
+    "Shuten-Douji": ("Shuten-Doji",),
+    "Tsukuyomi": ("Tsukuyomi-hime", "Tsukuyomihime"),
+    "Yumikaze": ("Won",),
+    "Zephyrine": ("Medjed",),
+    "Zashi": ("Nikki",),
+}
 
 NS = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
@@ -927,6 +995,20 @@ def eidolon_display_candidates(name: str) -> set[str]:
     return {candidate for candidate in candidates if candidate}
 
 
+def key_of_gaia_voucher_labels(name: str) -> list[str]:
+    candidate_names = eidolon_display_candidates(name)
+    candidates = {normalize_name(value) for value in candidate_names}
+    labels = []
+    for label, names in KEY_OF_GAIA_VOUCHER_SOURCES.items():
+        voucher_names = set()
+        for value in names:
+            voucher_names.add(normalize_name(value))
+            voucher_names.update(normalize_name(alias) for alias in KEY_OF_GAIA_VOUCHER_ALIASES.get(value, ()))
+        if candidates.intersection(voucher_names):
+            labels.append(label)
+    return labels
+
+
 def key_fragment_bases(value: str) -> set[str]:
     clean = html.unescape(value).replace("&", "and").strip()
     bases: set[str] = set()
@@ -1774,6 +1856,7 @@ def build_collections(eidolons: list[dict]) -> list[dict]:
                 "owned": int(eidolon["owned"]) if eidolon else 0,
                 "star_rating": int(eidolon.get("star_rating", 0) or 0) if eidolon else 0,
                 "detail_url": eidolon.get("detail_url", "") if eidolon else "",
+                "key_voucher_labels": key_of_gaia_voucher_labels(eidolon["name"] if eidolon else member_name),
             }
             if member["owned"]:
                 owned_count += 1
